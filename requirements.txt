@@ -1,0 +1,14 @@
+openvino
+optimum-intel
+transformers
+accelerate
+pillow
+mss
+pyautogui
+fastapi
+uvicorn
+pydantic
+numpy
+huggingface_hub
+pyperclip
+torchvision
