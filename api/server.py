@@ -73,6 +73,7 @@ class TaskResponse(BaseModel):
     status: str
     instruction: str
     iterations: int
+    token_usage: dict = {}
     history: list
 
 
@@ -83,7 +84,11 @@ async def run_task(req: TaskRequest):
     if _controller is None:
         raise HTTPException(503, "Agent not initialized yet")
     log.info("Received task: %s", req.instruction)
-    result = _controller.run(req.instruction)
+    try:
+        result = _controller.run(req.instruction)
+    except Exception as exc:
+        log.exception("Task failed: %s", exc)
+        raise HTTPException(500, f"Task execution failed: {exc}")
     return result
 
 

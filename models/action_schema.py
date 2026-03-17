@@ -16,6 +16,8 @@ class ActionType(str, Enum):
     TYPE = "type"
     SCROLL = "scroll"
     WAIT = "wait"
+    PRESS_KEY = "press_key"
+    HOTKEY = "hotkey"
 
 
 class Action(BaseModel):
@@ -28,19 +30,27 @@ class Action(BaseModel):
     amount: Optional[int] = None       # scroll amount
     seconds: Optional[float] = None    # wait duration
     description: Optional[str] = None
+    element: Optional[int] = None      # SoM element ID (resolved to x,y by executor)
+    key: Optional[str] = None          # for press_key
+    keys: Optional[list[str]] = None   # for hotkey (e.g. ["ctrl", "c"])
 
     def summary(self) -> str:
+        elem = f" elem={self.element}" if self.element else ""
         match self.type:
             case ActionType.CLICK:
-                return f"click({self.x}, {self.y})"
+                return f"click({self.x}, {self.y}){elem}"
             case ActionType.DOUBLE_CLICK:
-                return f"double_click({self.x}, {self.y})"
+                return f"double_click({self.x}, {self.y}){elem}"
             case ActionType.TYPE:
-                return f'type("{self.text}")'
+                return f'type("{self.text}"){elem}'
             case ActionType.SCROLL:
                 return f"scroll({self.amount})"
             case ActionType.WAIT:
                 return f"wait({self.seconds}s)"
+            case ActionType.PRESS_KEY:
+                return f"press_key({self.key})"
+            case ActionType.HOTKEY:
+                return f"hotkey({self.keys})"
             case _:
                 return str(self.model_dump())
 

@@ -5,7 +5,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 # ── Model ─────────────────────────────────────────────────
 MODEL_PATH = PROJECT_ROOT / "models" / "Phi-3.5-vision-instruct-int4-ov"
 OPENVINO_DEVICE = "CPU"  # CPU, GPU, or AUTO
-MAX_NEW_TOKENS = 1024
+MAX_NEW_TOKENS = 300
 
 # ── Agent loop ────────────────────────────────────────────
 MAX_ACTIONS_PER_STEP = 10

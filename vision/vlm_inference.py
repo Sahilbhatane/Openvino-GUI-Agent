@@ -6,6 +6,8 @@ an analyze_screen() function that takes a screenshot + instruction
 and returns the model's raw text response.
 """
 
+import time
+from dataclasses import dataclass
 from pathlib import Path
 
 from PIL import Image
@@ -14,16 +16,38 @@ from utils.logger import get_logger
 
 log = get_logger("vlm")
 
-# Prompt template instructs the model to return a strict JSON action plan.
 SYSTEM_PROMPT = """\
-You are a desktop automation agent. Given a screenshot and a task, \
-output ONLY a JSON object. No markdown fences, no explanation.
+You are a desktop automation agent. You see a screenshot with numbered red badges \
+marking interactive elements. A text list maps each number to an element.
+Output ONLY a JSON object with your plan. No markdown, no explanation.
 
-Format: {{"thought":"...","actions":[{{"type":"click","x":100,"y":200}}],\
-"task_complete":false}}
+Format: {{"thought":"...","actions":[...],"task_complete":false}}
 
-Action types: click(x,y) | double_click(x,y) | type(text) | scroll(amount) | wait(seconds)
-Coordinates are screen pixels. Set task_complete to true when the task is finished."""
+Action types (use ONLY these):
+  click        -- {{"type":"click","element":<id>}}  or  {{"type":"click","x":<int>,"y":<int>}}
+  double_click -- {{"type":"double_click","element":<id>}}
+  type         -- {{"type":"type","text":"<string>","element":<id>}}
+  scroll       -- {{"type":"scroll","amount":<int>}}
+  wait         -- {{"type":"wait","seconds":<number>}}
+  press_key    -- {{"type":"press_key","key":"<name>"}}  (enter, escape, tab, space, backspace, delete, up, down, left, right, win, f1-f12)
+  hotkey       -- {{"type":"hotkey","keys":["ctrl","c"]}}  (key combination)
+
+Prefer using "element" to reference numbered UI elements from the list.
+Fall back to raw x,y coordinates only if the target has no element number.
+To open an application: click the search bar element, type the name, press enter.
+Set task_complete to true when the task is finished."""
+
+
+@dataclass
+class TokenUsage:
+    """Tracks token counts and latency for a single VLM call."""
+    input_tokens: int = 0
+    output_tokens: int = 0
+    generation_time: float = 0.0  # seconds
+
+    @property
+    def tokens_per_second(self) -> float:
+        return self.output_tokens / self.generation_time if self.generation_time > 0 else 0.0
 
 
 class VLMInference:
@@ -34,6 +58,7 @@ class VLMInference:
         self.device = device
         self.model = None
         self.processor = None
+        self.last_usage: TokenUsage | None = None
 
     # ── loading ───────────────────────────────────────────
 
@@ -64,15 +89,18 @@ class VLMInference:
         self,
         image: Image.Image,
         instruction: str,
-        max_new_tokens: int = 1024,
+        elements_text: str = "",
+        max_new_tokens: int = 300,
     ) -> str:
         """Send screenshot + instruction to the VLM, return raw text output."""
         if not self.is_loaded:
             self.load()
 
+        element_block = f"\n\n{elements_text}" if elements_text else ""
         user_content = (
             "<|image_1|>\n"
-            f"{SYSTEM_PROMPT}\n\n"
+            f"{SYSTEM_PROMPT}"
+            f"{element_block}\n\n"
             f"USER TASK: {instruction}"
         )
         messages = [{"role": "user", "content": user_content}]
@@ -82,18 +110,35 @@ class VLMInference:
         )
 
         inputs = self.processor(prompt, [image], return_tensors="pt")
+        input_token_count = inputs["input_ids"].shape[1]
 
+        t0 = time.perf_counter()
         output_ids = self.model.generate(
             **inputs,
             max_new_tokens=max_new_tokens,
             do_sample=False,
         )
+        gen_time = time.perf_counter() - t0
 
-        # Slice off the prompt tokens so we only decode the new generation
-        new_tokens = output_ids[:, inputs["input_ids"].shape[1] :]
+        new_tokens = output_ids[:, input_token_count:]
+        output_token_count = new_tokens.shape[1]
+
+        self.last_usage = TokenUsage(
+            input_tokens=input_token_count,
+            output_tokens=output_token_count,
+            generation_time=gen_time,
+        )
+
         response = self.processor.batch_decode(
             new_tokens, skip_special_tokens=True
         )[0]
 
-        log.info("VLM response (%d chars): %s", len(response), response[:200])
+        log.info(
+            "Tokens: %d in / %d out  (%.1fs, %.1f tok/s) | response: %s",
+            input_token_count,
+            output_token_count,
+            gen_time,
+            self.last_usage.tokens_per_second,
+            response[:160],
+        )
         return response.strip()

@@ -10,7 +10,7 @@ import re
 
 from PIL import Image
 
-from models.action_schema import ActionPlan
+from models.action_schema import ActionPlan, ActionType
 from utils.logger import get_logger
 from vision.vlm_inference import VLMInference
 
@@ -22,9 +22,12 @@ class Planner:
         self.vlm = vlm
 
     def generate_plan(
-        self, screenshot: Image.Image, instruction: str
+        self,
+        screenshot: Image.Image,
+        instruction: str,
+        elements_text: str = "",
     ) -> ActionPlan:
-        raw = self.vlm.analyze_screen(screenshot, instruction)
+        raw = self.vlm.analyze_screen(screenshot, instruction, elements_text=elements_text)
         plan = self._parse_response(raw)
         log.info(
             "Plan: thought=%r  actions=%d  task_complete=%s",
@@ -33,6 +36,10 @@ class Planner:
             plan.task_complete,
         )
         return plan
+
+    @property
+    def last_token_usage(self):
+        return self.vlm.last_usage
 
     # ── response parsing ──────────────────────────────────
 
@@ -76,7 +83,45 @@ class Planner:
         if "done" in data and "task_complete" not in data:
             data["task_complete"] = data.pop("done")
 
+        # Drop actions whose type the executor doesn't support
+        valid_types = {t.value for t in ActionType}
+        if isinstance(data.get("actions"), list):
+            cleaned = []
+            for a in data["actions"]:
+                if isinstance(a, dict) and a.get("type") not in valid_types:
+                    log.warning("Dropping unsupported action type: %r", a.get("type"))
+                    continue
+                if isinstance(a, dict):
+                    a = Planner._sanitize_element_field(a)
+                cleaned.append(a)
+            data["actions"] = cleaned
+
         return ActionPlan(**data)
+
+    @staticmethod
+    def _sanitize_element_field(action: dict) -> dict:
+        """Coerce the 'element' field to int, or extract coords from a hallucinated dict."""
+        elem = action.get("element")
+        if elem is None:
+            return action
+        if isinstance(elem, int):
+            return action
+        if isinstance(elem, str):
+            try:
+                action["element"] = int(elem)
+            except ValueError:
+                log.warning("Dropping non-integer element ref: %r", elem)
+                action.pop("element", None)
+            return action
+        if isinstance(elem, dict):
+            log.warning("Model returned element as dict, extracting coords: %s", elem)
+            if "x" in elem and "y" in elem:
+                action.setdefault("x", elem["x"])
+                action.setdefault("y", elem["y"])
+            action.pop("element", None)
+            return action
+        action.pop("element", None)
+        return action
 
     @staticmethod
     def _try_repair_json(s: str) -> dict | None:

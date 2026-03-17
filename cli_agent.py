@@ -45,6 +45,15 @@ def main() -> None:
 
     print(f"Status:     {result.get('status')}")
     print(f"Iterations: {result.get('iterations')}")
+
+    usage = result.get("token_usage", {})
+    if usage:
+        print(
+            f"Tokens:     {usage.get('total_input_tokens', 0)} in / "
+            f"{usage.get('total_output_tokens', 0)} out  "
+            f"({usage.get('total_generation_time', 0)}s, "
+            f"{usage.get('avg_tokens_per_second', 0)} tok/s)"
+        )
     print()
 
     for step in result.get("history", []):
@@ -54,7 +63,15 @@ def main() -> None:
         results = step.get("results", [])
         done = step.get("task_complete", False)
 
-        print(f"--- Iteration {it} ---")
+        tok_str = ""
+        if step.get("input_tokens"):
+            tok_str = (
+                f"  [{step['input_tokens']} in / {step.get('output_tokens', 0)} out"
+                f"  {step.get('generation_time', 0)}s"
+                f"  {step.get('tokens_per_second', 0)} tok/s]"
+            )
+
+        print(f"--- Iteration {it} ---{tok_str}")
         print(f"  Thought: {thought}")
         if done:
             print("  Task complete.")

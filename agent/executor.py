@@ -29,7 +29,11 @@ class Executor:
         pyautogui.FAILSAFE = failsafe
         pyautogui.PAUSE = action_delay
 
-    def execute(self, plan: ActionPlan) -> list[str]:
+    def execute(
+        self,
+        plan: ActionPlan,
+        element_map: dict[int, tuple[int, int]] | None = None,
+    ) -> list[str]:
         """Run each action in the plan, return a log line per action."""
         actions = plan.actions[: self.max_actions]
         if len(plan.actions) > self.max_actions:
@@ -41,11 +45,28 @@ class Executor:
 
         results: list[str] = []
         for idx, action in enumerate(actions, 1):
-            result = self._run(action)
+            resolved = self._resolve_element(action, element_map)
+            result = self._run(resolved)
             log.info("  [%d/%d] %s", idx, len(actions), result)
             results.append(result)
             time.sleep(self.action_delay)
         return results
+
+    # ── element resolution ─────────────────────────────────
+
+    @staticmethod
+    def _resolve_element(
+        action: Action,
+        element_map: dict[int, tuple[int, int]] | None,
+    ) -> Action:
+        """If the action references an element ID, resolve it to x,y coords."""
+        if action.element is None or element_map is None:
+            return action
+        coords = element_map.get(action.element)
+        if coords is None:
+            log.warning("Element %d not found in map, keeping raw coords", action.element)
+            return action
+        return action.model_copy(update={"x": coords[0], "y": coords[1]})
 
     # ── individual action dispatch ────────────────────────
 
@@ -61,6 +82,8 @@ class Executor:
                     return f"double_click({action.x}, {action.y})"
 
                 case ActionType.TYPE:
+                    if action.x is not None and action.y is not None:
+                        pyautogui.click(action.x, action.y)
                     self._safe_type(action.text or "")
                     return f'type("{action.text}")'
 
@@ -71,6 +94,16 @@ class Executor:
                 case ActionType.WAIT:
                     time.sleep(action.seconds or 1)
                     return f"wait({action.seconds}s)"
+
+                case ActionType.PRESS_KEY:
+                    key = action.key or ""
+                    pyautogui.press(key)
+                    return f"press_key({key})"
+
+                case ActionType.HOTKEY:
+                    keys = action.keys or []
+                    pyautogui.hotkey(*keys)
+                    return f"hotkey({'+'.join(keys)})"
 
                 case _:
                     return f"unknown action: {action.type}"
