@@ -72,6 +72,46 @@ def _draw_bbox_highlight(
         draw.rectangle([l, t, r, b], outline=BADGE_COLOR, width=2)
 
 
+def draw_action_overlay(
+    image: Image.Image,
+    elements: list[UIElement],
+    target_element_id: int | None = None,
+    action_text: str = "",
+) -> Image.Image:
+    """Draw SoM overlay plus highlight the target element and show action text."""
+    annotated = draw_som_overlay(image, elements)
+
+    if target_element_id is None and not action_text:
+        return annotated
+
+    annotated = annotated.convert("RGBA")
+    overlay = Image.new("RGBA", annotated.size, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
+
+    if target_element_id is not None:
+        for elem in elements:
+            if elem.id == target_element_id:
+                l, t, r, b = elem.bbox
+                l = max(0, l)
+                t = max(0, t)
+                r = min(annotated.width, r)
+                b = min(annotated.height, b)
+                for i in range(3):
+                    draw.rectangle(
+                        [l - i, t - i, r + i, b + i],
+                        outline=(0, 255, 100, 220),
+                    )
+                break
+
+    if action_text:
+        font = _get_font(14)
+        draw.rectangle([0, 0, annotated.width, 32], fill=(0, 0, 0, 180))
+        draw.text((10, 7), action_text, fill=(0, 255, 100, 255), font=font)
+
+    annotated = Image.alpha_composite(annotated, overlay)
+    return annotated.convert("RGB")
+
+
 def _get_font(badge_radius: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
     size = max(badge_radius, 10)
     try:

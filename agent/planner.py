@@ -26,9 +26,17 @@ class Planner:
         screenshot: Image.Image,
         instruction: str,
         elements_text: str = "",
+        history_text: str = "",
     ) -> ActionPlan:
-        raw = self.vlm.analyze_screen(screenshot, instruction, elements_text=elements_text)
+        raw = self.vlm.analyze_screen(
+            screenshot, instruction,
+            elements_text=elements_text,
+            history_text=history_text,
+        )
         plan = self._parse_response(raw)
+        if len(plan.actions) > 1:
+            log.warning("VLM returned %d actions, taking only the first", len(plan.actions))
+            plan = plan.model_copy(update={"actions": plan.actions[:1]})
         log.info(
             "Plan: thought=%r  actions=%d  task_complete=%s",
             plan.thought[:80],

@@ -9,12 +9,20 @@ MAX_NEW_TOKENS = 300
 
 # ── Agent loop ────────────────────────────────────────────
 MAX_ACTIONS_PER_STEP = 10
-MAX_ITERATIONS = 5
+MAX_ITERATIONS = 10
 STEP_DELAY_SECONDS = 1.5
+
+# ── ReAct step-wise loop ─────────────────────────────────
+MEMORY_SIZE = 5
+SCREEN_CHANGE_THRESHOLD = 0.02
+MAX_RETRIES_NO_CHANGE = 2
 
 # ── Executor safety ──────────────────────────────────────
 PYAUTOGUI_FAILSAFE = True  # move mouse to top-left corner to abort
 ACTION_DELAY_SECONDS = 0.3
+CURSOR_MOVE_DURATION = 0.2  # animate cursor before click
+HIGHLIGHT_DURATION = 0.3    # show target highlight before executing
+MAX_PLAN_RETRIES = 1        # retry VLM if first response has no valid action
 
 # ── Debug ─────────────────────────────────────────────────
 DEBUG_MODE = True

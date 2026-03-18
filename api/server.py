@@ -14,14 +14,20 @@ from agent.executor import Executor
 from agent.planner import Planner
 from config import (
     ACTION_DELAY_SECONDS,
+    CURSOR_MOVE_DURATION,
     DEBUG_MODE,
     DEBUG_SCREENSHOT_DIR,
+    HIGHLIGHT_DURATION,
     MAX_ACTIONS_PER_STEP,
     MAX_ITERATIONS,
+    MAX_PLAN_RETRIES,
+    MEMORY_SIZE,
     MODEL_PATH,
     MAX_NEW_TOKENS,
+    MAX_RETRIES_NO_CHANGE,
     OPENVINO_DEVICE,
     PYAUTOGUI_FAILSAFE,
+    SCREEN_CHANGE_THRESHOLD,
     STEP_DELAY_SECONDS,
 )
 from utils.logger import get_logger
@@ -46,12 +52,18 @@ async def lifespan(app: FastAPI):
         max_actions=MAX_ACTIONS_PER_STEP,
         action_delay=ACTION_DELAY_SECONDS,
         failsafe=PYAUTOGUI_FAILSAFE,
+        cursor_move_duration=CURSOR_MOVE_DURATION,
     )
     _controller = AgentController(
         planner=planner,
         executor=executor,
         max_iterations=MAX_ITERATIONS,
         step_delay=STEP_DELAY_SECONDS,
+        memory_size=MEMORY_SIZE,
+        change_threshold=SCREEN_CHANGE_THRESHOLD,
+        max_retries_no_change=MAX_RETRIES_NO_CHANGE,
+        max_plan_retries=MAX_PLAN_RETRIES,
+        highlight_duration=HIGHLIGHT_DURATION,
         debug=DEBUG_MODE,
         debug_dir=DEBUG_SCREENSHOT_DIR,
     )

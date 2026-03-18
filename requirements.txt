@@ -13,3 +13,4 @@ huggingface_hub
 pyperclip
 torchvision
 pywinauto
+PySide6

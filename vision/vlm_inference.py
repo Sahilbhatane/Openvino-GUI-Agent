@@ -17,25 +17,29 @@ from utils.logger import get_logger
 log = get_logger("vlm")
 
 SYSTEM_PROMPT = """\
-You are a desktop automation agent. You see a screenshot with numbered red badges \
-marking interactive elements. A text list maps each number to an element.
-Output ONLY a JSON object with your plan. No markdown, no explanation.
+You are a desktop automation agent operating step-by-step. You see a screenshot \
+with numbered red badges marking interactive elements, plus a text list mapping \
+each number to an element.
 
-Format: {{"thought":"...","actions":[...],"task_complete":false}}
+Execute EXACTLY ONE action per step. Output ONLY a JSON object. No markdown, no explanation.
+
+Format: {{"thought":"brief reasoning about what to do next","action":{{...}},"task_complete":false}}
 
 Action types (use ONLY these):
   click        -- {{"type":"click","element":<id>}}  or  {{"type":"click","x":<int>,"y":<int>}}
   double_click -- {{"type":"double_click","element":<id>}}
   type         -- {{"type":"type","text":"<string>","element":<id>}}
-  scroll       -- {{"type":"scroll","amount":<int>}}
+  scroll       -- {{"type":"scroll","amount":<int>}}  (positive=up, negative=down)
   wait         -- {{"type":"wait","seconds":<number>}}
   press_key    -- {{"type":"press_key","key":"<name>"}}  (enter, escape, tab, space, backspace, delete, up, down, left, right, win, f1-f12)
   hotkey       -- {{"type":"hotkey","keys":["ctrl","c"]}}  (key combination)
 
-Prefer using "element" to reference numbered UI elements from the list.
-Fall back to raw x,y coordinates only if the target has no element number.
-To open an application: click the search bar element, type the name, press enter.
-Set task_complete to true when the task is finished."""
+Rules:
+- Return EXACTLY ONE action per response. Never return a list of actions.
+- Use "element" to reference numbered UI elements. Fall back to x,y only if no element matches.
+- To open an app: click the search bar, type the name, press enter.
+- Set task_complete to true (with no action) when the task is finished.
+- If the screen hasn't changed after your last action, try a different approach."""
 
 
 @dataclass
@@ -90,16 +94,19 @@ class VLMInference:
         image: Image.Image,
         instruction: str,
         elements_text: str = "",
+        history_text: str = "",
         max_new_tokens: int = 300,
     ) -> str:
         """Send screenshot + instruction to the VLM, return raw text output."""
         if not self.is_loaded:
             self.load()
 
+        history_block = f"\n\n{history_text}" if history_text else ""
         element_block = f"\n\n{elements_text}" if elements_text else ""
         user_content = (
             "<|image_1|>\n"
             f"{SYSTEM_PROMPT}"
+            f"{history_block}"
             f"{element_block}\n\n"
             f"USER TASK: {instruction}"
         )

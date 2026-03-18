@@ -23,9 +23,11 @@ class Executor:
         max_actions: int = 10,
         action_delay: float = 0.3,
         failsafe: bool = True,
+        cursor_move_duration: float = 0.2,
     ):
         self.max_actions = max_actions
         self.action_delay = action_delay
+        self.cursor_move_duration = cursor_move_duration
         pyautogui.FAILSAFE = failsafe
         pyautogui.PAUSE = action_delay
 
@@ -52,6 +54,17 @@ class Executor:
             time.sleep(self.action_delay)
         return results
 
+    def execute_single(
+        self,
+        action: Action,
+        element_map: dict[int, tuple[int, int]] | None = None,
+    ) -> str:
+        """Resolve and execute a single action. Returns a result string."""
+        resolved = self._resolve_element(action, element_map)
+        result = self._run(resolved)
+        log.info("  %s", result)
+        return result
+
     # ── element resolution ─────────────────────────────────
 
     @staticmethod
@@ -74,16 +87,19 @@ class Executor:
         try:
             match action.type:
                 case ActionType.CLICK:
-                    pyautogui.click(action.x, action.y)
+                    pyautogui.moveTo(action.x, action.y, duration=self.cursor_move_duration)
+                    pyautogui.click()
                     return f"click({action.x}, {action.y})"
 
                 case ActionType.DOUBLE_CLICK:
-                    pyautogui.doubleClick(action.x, action.y)
+                    pyautogui.moveTo(action.x, action.y, duration=self.cursor_move_duration)
+                    pyautogui.doubleClick()
                     return f"double_click({action.x}, {action.y})"
 
                 case ActionType.TYPE:
                     if action.x is not None and action.y is not None:
-                        pyautogui.click(action.x, action.y)
+                        pyautogui.moveTo(action.x, action.y, duration=self.cursor_move_duration)
+                        pyautogui.click()
                     self._safe_type(action.text or "")
                     return f'type("{action.text}")'
 
