@@ -82,7 +82,7 @@ python cli_agent.py "open calculator and compute 42 x 7"
 ## Project Structure
 
 ```
-OpenVino GUI-Agent/
+OpenVINO GUI-Agent/
 ├── main.py                    # FastAPI server entry point
 ├── cli_agent.py               # CLI client
 ├── gui_app.py                 # PySide6 3-panel desktop UI
@@ -161,7 +161,7 @@ All tunables are in `config.py`:
 |----|----------------------|---------|
 | Windows | pywinauto (UIA) | `pip install pywinauto` (included in requirements.txt) |
 | Linux | AT-SPI (pyatspi) | `sudo apt install python3-pyatspi` |
-| macOS | AXUIElement | `pip install pyobjc-framework-ApplicationServices pyobjc-framework-Quartz` |
+| macOS | AXUIElement | `pip install pyobjc-framework-ApplicationServices pyobjc-framework-Quartz pyobjc-framework-Cocoa` |
 
 ## Running Tests
 

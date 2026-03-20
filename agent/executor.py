@@ -14,8 +14,7 @@ import time
 import pyautogui
 
 from agent.errors import AgentError, ErrorCategory
-from agent.safety import SafetyGuard, SafetyViolation
-from agent.os_actions import open_app, type_text
+from agent.safety import SafetyGuard
 from models.action_schema import Action, ActionPlan, ActionType
 from utils.logger import get_logger
 
@@ -31,9 +30,7 @@ class ExecutionResult:
         self.error = error
 
     def __str__(self) -> str:
-        if self.success:
-            return self.description
-        return f"FAILED {self.description}"
+        return self.description
 
     def to_dict(self) -> dict:
         d = {"description": self.description, "success": self.success}
@@ -115,7 +112,7 @@ class Executor:
 
         if action.element is not None and element_map:
             log.info("Primary execution failed, trying coordinate fallback")
-            coord_action = action.model_copy(update={"element": None})
+            coord_action = resolved.model_copy(update={"element": None})
             if coord_action.x is not None and coord_action.y is not None:
                 fallback = self._run(coord_action)
                 if fallback.success:
@@ -222,7 +219,7 @@ class Executor:
             raise
         except Exception as exc:
             return ExecutionResult(
-                description=f"FAILED {action.summary()}: {exc}",
+                description=f"{action.summary()}: {exc}",
                 success=False,
                 error=AgentError(
                     category=ErrorCategory.EXECUTION,

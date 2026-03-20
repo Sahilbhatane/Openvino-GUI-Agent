@@ -13,8 +13,8 @@ import json
 import sys
 import time
 
-from PySide6.QtCore import Qt, Signal, Slot, QThread, QSize, QTimer
-from PySide6.QtGui import QImage, QPixmap, QFont, QTextCursor, QColor, QPalette
+from PySide6.QtCore import Qt, Signal, Slot, QThread, QSize
+from PySide6.QtGui import QImage, QPixmap, QFont, QTextCursor
 from PySide6.QtWidgets import (
     QApplication,
     QMainWindow,
@@ -29,9 +29,6 @@ from PySide6.QtWidgets import (
     QStatusBar,
     QCheckBox,
     QFrame,
-    QScrollArea,
-    QSizePolicy,
-    QGroupBox,
 )
 from PIL import Image
 
@@ -40,6 +37,7 @@ from agent.executor import Executor
 from agent.planner import Planner
 from config import (
     ACTION_DELAY_SECONDS,
+    BLOCK_DANGEROUS_ACTIONS,
     CURSOR_MOVE_DURATION,
     DEBUG_MODE,
     DEBUG_SCREENSHOT_DIR,
@@ -250,21 +248,6 @@ QLabel#status_label {{
     border-radius: 4px;
 }}
 
-/* ── GroupBox ────────────────────────────────────── */
-QGroupBox {{
-    color: {TEXT_SECONDARY};
-    font-size: 10px;
-    font-weight: bold;
-    border: 1px solid {BORDER_COLOR};
-    border-radius: 6px;
-    margin-top: 8px;
-    padding-top: 14px;
-}}
-QGroupBox::title {{
-    subcontrol-origin: margin;
-    left: 10px;
-    padding: 0 4px;
-}}
 """
 
 
@@ -317,6 +300,7 @@ class ModelLoader(QThread):
                 action_delay=ACTION_DELAY_SECONDS,
                 failsafe=PYAUTOGUI_FAILSAFE,
                 cursor_move_duration=CURSOR_MOVE_DURATION,
+                block_dangerous=BLOCK_DANGEROUS_ACTIONS,
             )
             controller = AgentController(
                 planner=planner,

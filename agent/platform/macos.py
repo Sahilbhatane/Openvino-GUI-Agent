@@ -1,7 +1,8 @@
 """
 macOS accessibility backend using ApplicationServices / AXUIElement.
 
-Requires: pyobjc-framework-ApplicationServices (pip installable).
+Requires: pyobjc-framework-ApplicationServices, pyobjc-framework-Quartz,
+          pyobjc-framework-Cocoa (pip installable).
 System Preferences > Privacy & Security > Accessibility must grant access.
 """
 
@@ -40,7 +41,7 @@ class MacOSAccessibility:
         except ImportError:
             log.warning(
                 "pyobjc not installed. Install via: "
-                "pip install pyobjc-framework-ApplicationServices pyobjc-framework-Quartz"
+                "pip install pyobjc-framework-ApplicationServices pyobjc-framework-Quartz pyobjc-framework-Cocoa"
             )
             return []
 
@@ -63,12 +64,12 @@ class MacOSAccessibility:
 
     def _walk_all_apps(self, elements: list[UIElement], max_elements: int) -> None:
         try:
-            import Quartz
+            from AppKit import NSWorkspace
             from ApplicationServices import AXUIElementCreateApplication
         except ImportError:
             return
 
-        workspace_apps = Quartz.NSWorkspace.sharedWorkspace().runningApplications()
+        workspace_apps = NSWorkspace.sharedWorkspace().runningApplications()
         for app in workspace_apps:
             if len(elements) >= max_elements:
                 break

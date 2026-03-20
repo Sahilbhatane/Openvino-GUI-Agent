@@ -14,7 +14,8 @@ class TestExecutionResult:
 
     def test_failure_str(self):
         r = ExecutionResult("click(None, None)", success=False)
-        assert "FAILED" in str(r)
+        assert str(r) == "click(None, None)"
+        assert r.success is False
 
     def test_to_dict_with_error(self):
         from agent.errors import AgentError, ErrorCategory
