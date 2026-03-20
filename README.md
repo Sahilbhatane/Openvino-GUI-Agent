@@ -1,177 +1,178 @@
 # OpenVINO GUI Agent
 
-A local desktop GUI agent powered by **Phi-3.5 Vision (INT4)** running through
-**OpenVINO**. The agent captures your screen, identifies interactive UI elements
-via the Windows accessibility tree, and executes mouse/keyboard actions to
-complete natural-language tasks -- all running locally on your machine.
+A cross-platform desktop GUI agent powered by a local Vision-Language Model (Phi-3.5 Vision INT4 via OpenVINO). The agent observes the screen, reasons about it, and executes real OS-level actions to complete user instructions.
 
 ## Architecture
 
+The agent follows a strict **Perception -> Planning -> Action -> Feedback** loop:
+
 ```
-User instruction
-      │
-Screen capture (mss)
-      │
-Accessibility tree (pywinauto)
-      │          │
-Element list   Set-of-Marks overlay
-      │          │
-      ├──────────┘
-      │
-Vision-Language Model (OpenVINO)
-      │
-Structured action plan (JSON)
-      │
-Executor (pyautogui) ── resolves element IDs → coordinates
-      │
-New screenshot → loop
+User Instruction
+      |
+      v
+[1. Screen Capture] -----> mss (cross-platform)
+      |
+[2. Accessibility]  -----> pywinauto (Win) / AT-SPI (Linux) / AXUIElement (macOS)
+      |
+[3. Grounding]      -----> Set-of-Marks overlay (numbered badges on screenshot)
+      |
+[4. VLM Planning]   -----> OpenVINO Phi-3.5 Vision INT4 -> JSON action plan
+      |
+[5. Safety Check]   -----> Dangerous action blocking, action limits
+      |
+[6. Execution]      -----> PyAutoGUI with fallback strategies
+      |
+[7. Feedback]       -----> Screen diff detection, retry if stuck
+      |
+      v
+  Loop or Done
 ```
 
-Each iteration the agent:
-1. Captures a screenshot
-2. Walks the Windows UI Automation tree to find interactive elements (buttons, text fields, links, etc.)
-3. Draws numbered red badges on the screenshot (Set-of-Marks overlay)
-4. Sends the annotated screenshot + element list + instruction to the VLM
-5. Parses the VLM's JSON action plan (which references elements by number)
-6. Executes actions via PyAutoGUI, resolving element IDs to screen coordinates
-7. Repeats until the task is complete or the iteration limit is reached
+## Features
 
-## Quick start
+- **Cross-platform**: Windows, Linux, macOS accessibility backends
+- **Local inference**: Runs entirely on CPU via OpenVINO (no cloud API needed)
+- **Observable**: 3-panel UI shows live screen, agent reasoning, and control metrics
+- **Safety system**: Blocks dangerous commands (rm -rf, format, shutdown), hotkeys (Alt+F4), and executables (powershell, cmd)
+- **Structured errors**: Every error is categorized (model/execution/os/grounding/safety) with recovery info
+- **Fallback strategies**: Element click -> coordinate fallback -> keyboard navigation
+- **Debug mode**: Saves raw/annotated screenshots, JSON plans, and action logs per iteration
+
+## Quick Start
+
+### 1. Install dependencies
 
 ```bash
-# 1. Activate the virtual environment
-.\venv\Scripts\activate        # Windows
-source venv/bin/activate       # Linux / macOS
-
-# 2. Install dependencies
 pip install -r requirements.txt
+```
 
-# 3. Start the server (loads the model on startup)
+### 2. Download the model
+
+```bash
+huggingface-cli download OpenVINO/Phi-3.5-vision-instruct-int4-ov --local-dir models/Phi-3.5-vision-instruct-int4-ov
+```
+
+### 3. Launch
+
+**Desktop GUI** (recommended):
+```bash
+python gui_app.py
+```
+
+**API server**:
+```bash
 python main.py
-
-# 4. Send a task via curl or any HTTP client
-curl -X POST http://127.0.0.1:8000/run-task \
-  -H "Content-Type: application/json" \
-  -d "{\"instruction\": \"open the calculator\"}"
+# Then send tasks via HTTP:
+curl -X POST http://localhost:8000/run-task -H "Content-Type: application/json" -d '{"instruction": "open calculator"}'
 ```
 
-## CLI usage
-
-With the server running in one terminal, open another and run:
-
+**CLI client**:
 ```bash
-python cli_agent.py "open calculator"
+python cli_agent.py "open calculator and compute 42 x 7"
 ```
 
-The CLI sends the instruction to the server's `/run-task` endpoint and prints
-each iteration's reasoning, actions, results, and **token usage stats**:
+## UI Layout
+
+| Panel | Content |
+|-------|---------|
+| **Left** | Instruction input, Run/Stop buttons, iteration counter, status, token usage, speed, UI element count, debug toggle |
+| **Center** | Live screenshot stream with Set-of-Marks overlay and target element highlighting |
+| **Right** | Per-iteration reasoning: Thought, Action Plan (JSON), Executed action, Result, Errors |
+
+## Project Structure
 
 ```
-Status:     max_iterations
-Iterations: 5
-Tokens:     9385 in / 492 out  (509.3s, 1.0 tok/s)
-
---- Iteration 1 ---  [1877 in / 86 out  123.09s  0.7 tok/s]
-  Thought: To open the calculator, I need to find the appropriate button...
-  Action: click  ->  click(712, 1050)
+OpenVINO GUI-Agent/
+├── main.py                    # FastAPI server entry point
+├── cli_agent.py               # CLI client
+├── gui_app.py                 # PySide6 3-panel desktop UI
+├── config.py                  # All tunables (model path, limits, delays)
+├── agent/
+│   ├── controller.py          # ReAct loop orchestrator
+│   ├── planner.py             # VLM -> JSON action plan parser
+│   ├── executor.py            # PyAutoGUI execution with fallbacks
+│   ├── screen_analyzer.py     # Platform-dispatching accessibility extraction
+│   ├── safety.py              # Dangerous action blocking
+│   ├── errors.py              # Structured error categories
+│   ├── os_actions.py          # Cross-platform OS actions (open_app, etc.)
+│   └── platform/
+│       ├── __init__.py         # Auto-detects OS, returns correct backend
+│       ├── windows.py          # pywinauto UIA backend
+│       ├── linux.py            # AT-SPI backend
+│       └── macos.py            # AXUIElement backend
+├── api/
+│   └── server.py              # FastAPI REST endpoint
+├── models/
+│   └── action_schema.py       # Pydantic action/plan schemas
+├── vision/
+│   ├── vlm_inference.py       # OpenVINO model loading and inference
+│   ├── screen_capture.py      # mss screen capture + downscaling
+│   └── som_overlay.py         # Set-of-Marks badge drawing
+├── utils/
+│   └── logger.py              # Shared logging
+├── tests/
+│   ├── test_planner.py        # JSON parsing tests (12 cases)
+│   ├── test_executor.py       # Element resolution + safety tests
+│   ├── test_safety.py         # Dangerous action blocking tests (13 cases)
+│   ├── test_screen_analyzer.py # UIElement + builder tests
+│   └── test_errors.py         # Error categorization tests
+└── requirements.txt
 ```
 
-An optional `--url` flag lets you point to a different server address:
+## Action Types
 
-```bash
-python cli_agent.py "enable dark mode" --url http://192.168.1.50:8000
-```
-
-## Endpoints
-
-| Method | Path        | Description                                    |
-| ------ | ----------- | ---------------------------------------------- |
-| POST   | `/run-task` | Run a GUI task. Body: `{"instruction": "..."}` |
-| GET    | `/health`   | Check if the model is loaded and ready         |
-
-## Action types
-
-The agent supports 7 action types:
-
-| Action         | JSON format                                    | Description                       |
-| -------------- | ---------------------------------------------- | --------------------------------- |
-| `click`        | `{"type":"click","element":3}`                 | Click an element by SoM ID        |
-| `double_click` | `{"type":"double_click","element":3}`          | Double-click an element            |
-| `type`         | `{"type":"type","text":"hello","element":3}`   | Type text into an element          |
-| `scroll`       | `{"type":"scroll","amount":-3}`                | Scroll (positive=up, negative=down)|
-| `wait`         | `{"type":"wait","seconds":2}`                  | Wait before next action            |
-| `press_key`    | `{"type":"press_key","key":"enter"}`           | Press a single key                 |
-| `hotkey`       | `{"type":"hotkey","keys":["ctrl","c"]}`        | Press a key combination            |
-
-Actions can reference elements by numbered ID (from the accessibility tree) or
-fall back to raw `x`/`y` pixel coordinates.
-
-## Project structure
-
-```
-main.py                  Entrypoint -- starts FastAPI server
-cli_agent.py             CLI client -- send tasks from the terminal
-config.py                All tunables (model path, limits, debug)
-
-agent/
-  controller.py          Orchestrates the capture → analyze → plan → execute loop
-  planner.py             VLM call + JSON parsing into ActionPlan
-  executor.py            Drives PyAutoGUI, resolves element IDs to coordinates
-  screen_analyzer.py     Walks Windows UIA accessibility tree for interactive elements
-
-vision/
-  screen_capture.py      Fast screenshot via mss (downscaled to 1280px max)
-  vlm_inference.py       OpenVINO Phi-3.5 Vision wrapper with token usage tracking
-  som_overlay.py         Set-of-Marks: draws numbered badges on screenshots
-
-models/
-  action_schema.py       Pydantic schemas (Action, ActionPlan, ActionType)
-
-api/
-  server.py              FastAPI app with /run-task endpoint
-
-utils/
-  logger.py              Shared logging setup
-```
-
-## Screen grounding
-
-The agent uses **pywinauto** to read the Windows UI Automation accessibility
-tree each iteration. This gives it a structured list of every visible button,
-text field, link, menu item, etc. with bounding boxes.
-
-These elements are:
-- **Numbered** sequentially (1, 2, 3, ...)
-- **Overlaid** on the screenshot as red badges (Set-of-Marks)
-- **Listed** as text in the VLM prompt so the model can reference them by ID
-
-This means the model says `"element": 1` (click the Start button) instead of
-guessing raw pixel coordinates.
-
-## Debug mode
-
-Set `DEBUG_MODE = True` in `config.py` (default). Each iteration saves:
-- `debug_screenshots/step_N_raw.png` -- the original screenshot
-- `debug_screenshots/step_N_som.png` -- the annotated screenshot with SoM badges
-
-## Configuration
-
-Key settings in `config.py`:
-
-| Setting              | Default | Description                          |
-| -------------------- | ------- | ------------------------------------ |
-| `OPENVINO_DEVICE`    | `CPU`   | OpenVINO device (`CPU`, `GPU`, `AUTO`) |
-| `MAX_NEW_TOKENS`     | `300`   | Max tokens the VLM generates per call |
-| `MAX_ITERATIONS`     | `5`     | Max loop iterations per task          |
-| `MAX_ACTIONS_PER_STEP` | `10` | Max actions the executor runs per step |
-| `DEBUG_MODE`         | `True`  | Save debug screenshots each iteration |
+| Type | Fields | Description |
+|------|--------|-------------|
+| `click` | `element` or `x, y` | Click a UI element or coordinate |
+| `double_click` | `element` or `x, y` | Double-click |
+| `type` | `text`, optional `element` | Type text into an input |
+| `scroll` | `amount` | Scroll (positive=up, negative=down) |
+| `wait` | `seconds` | Pause execution |
+| `press_key` | `key` | Press a single key (enter, tab, escape, etc.) |
+| `hotkey` | `keys` | Key combination (e.g. ctrl+c) |
 
 ## Safety
 
-- **Failsafe**: move mouse to the top-left corner of the screen to abort at
-  any time (PyAutoGUI failsafe).
-- **Action cap**: max 10 actions per iteration (configurable).
-- **Iteration cap**: max 5 loop iterations per task (configurable).
-- **Error handling**: invalid VLM responses (unknown action types, malformed
-  JSON, hallucinated element formats) are caught and logged gracefully instead
-  of crashing the server.
+- **PyAutoGUI failsafe**: Move mouse to top-left corner to abort
+- **Global Stop button**: Immediately halts the agent loop
+- **Dangerous command detection**: Blocks rm -rf, format, shutdown, del /s, etc.
+- **Dangerous hotkey detection**: Blocks Alt+F4, Ctrl+Alt+Delete
+- **Executable blocking**: Blocks powershell, cmd, bash, wscript, etc.
+- **Action limit**: Configurable cap per iteration (default: 10)
+
+## Configuration
+
+All tunables are in `config.py`:
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `OPENVINO_DEVICE` | `CPU` | OpenVINO device (CPU, GPU, AUTO) |
+| `MAX_ITERATIONS` | `10` | Maximum steps per task |
+| `MAX_NEW_TOKENS` | `300` | VLM generation limit |
+| `STEP_DELAY_SECONDS` | `1.5` | Pause between iterations |
+| `MEMORY_SIZE` | `5` | Steps kept in short-term memory |
+| `SCREEN_CHANGE_THRESHOLD` | `0.02` | Minimum diff to detect screen change |
+| `DEBUG_MODE` | `True` | Save debug artifacts per step |
+| `BLOCK_DANGEROUS_ACTIONS` | `True` | Enable safety system |
+
+## Platform Requirements
+
+| OS | Accessibility Backend | Install |
+|----|----------------------|---------|
+| Windows | pywinauto (UIA) | `pip install pywinauto` (included in requirements.txt) |
+| Linux | AT-SPI (pyatspi) | `sudo apt install python3-pyatspi` |
+| macOS | AXUIElement | `pip install pyobjc-framework-ApplicationServices pyobjc-framework-Quartz pyobjc-framework-Cocoa` |
+
+## Running Tests
+
+```bash
+python -m pytest tests/ -v
+```
+
+## Debug Output
+
+When `DEBUG_MODE = True`, each iteration saves to `debug_screenshots/`:
+- `step_N_raw.png` -- raw screenshot
+- `step_N_som.png` -- annotated screenshot with SoM overlay
+- `step_N_plan.json` -- VLM action plan
+- `step_N_actions.json` -- executed actions and results

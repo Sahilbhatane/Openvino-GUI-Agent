@@ -12,5 +12,6 @@ numpy
 huggingface_hub
 pyperclip
 torchvision
-pywinauto
+pywinauto; sys_platform == "win32"
 PySide6
+pytest

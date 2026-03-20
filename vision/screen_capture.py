@@ -7,7 +7,7 @@ Returns PIL Images suitable for direct VLM input.
 import mss
 from PIL import Image
 
-MAX_VLM_DIMENSION = 1280
+from config import MAX_VLM_DIMENSION
 
 
 def _downscale(img: Image.Image, max_dim: int = MAX_VLM_DIMENSION) -> Image.Image:
