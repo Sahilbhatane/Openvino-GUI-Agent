@@ -62,17 +62,17 @@ class Executor:
         self,
         plan: ActionPlan,
         element_map: dict[int, tuple[int, int]] | None = None,
-    ) -> list[str]:
+    ) -> list[ExecutionResult]:
         actions = plan.actions[: self.max_actions]
         if len(plan.actions) > self.max_actions:
             log.warning("Plan has %d actions, capping to %d", len(plan.actions), self.max_actions)
 
         self.safety.reset_iteration()
-        results: list[str] = []
+        results: list[ExecutionResult] = []
         for idx, action in enumerate(actions, 1):
             res = self._execute_with_fallback(action, element_map)
             log.info("  [%d/%d] %s", idx, len(actions), res)
-            results.append(str(res))
+            results.append(res)
             time.sleep(self.action_delay)
         return results
 
@@ -80,11 +80,11 @@ class Executor:
         self,
         action: Action,
         element_map: dict[int, tuple[int, int]] | None = None,
-    ) -> str:
+    ) -> ExecutionResult:
         self.safety.reset_iteration()
         res = self._execute_with_fallback(action, element_map)
         log.info("  %s", res)
-        return str(res)
+        return res
 
     def _execute_with_fallback(
         self,
@@ -183,8 +183,9 @@ class Executor:
                     if action.x is not None and action.y is not None:
                         pyautogui.moveTo(action.x, action.y, duration=self.cursor_move_duration)
                         pyautogui.click()
-                    self._safe_type(action.text or "")
-                    return ExecutionResult(f'type("{action.text}")')
+                    text = action.text or ""
+                    self._safe_type(text)
+                    return ExecutionResult(f'type("{text}")')
 
                 case ActionType.SCROLL:
                     pyautogui.scroll(action.amount or 0)
@@ -219,7 +220,7 @@ class Executor:
             raise
         except Exception as exc:
             return ExecutionResult(
-                description=f"{action.summary()}: {exc}",
+                description=f"FAILED {action.summary()}: {exc}",
                 success=False,
                 error=AgentError(
                     category=ErrorCategory.EXECUTION,
