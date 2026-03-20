@@ -3,19 +3,18 @@ PySide6 desktop GUI for the OpenVINO GUI Agent.
 
 Launch:  python gui_app.py
 
-Features:
-  - Instruction input + Run / Stop controls
-  - Live screenshot preview with SoM + action overlay
-  - Step-by-step reasoning log (thought + action)
-  - Real-time status indicator (IDLE / PLANNING / EXECUTING / ...)
-  - "Show reasoning" toggle
-  - Model loaded once at startup, reused across tasks
+Three-panel layout:
+  LEFT   - User control (instruction, run/stop, iteration counter, status)
+  CENTER - Live screenshot with Set-of-Marks overlay and target highlight
+  RIGHT  - Agent reasoning log (UL-TARS style: thought, plan, action, result, errors)
 """
 
+import json
 import sys
+import time
 
-from PySide6.QtCore import Qt, Signal, Slot, QThread, QSize
-from PySide6.QtGui import QImage, QPixmap, QFont, QTextCursor
+from PySide6.QtCore import Qt, Signal, Slot, QThread, QSize, QTimer
+from PySide6.QtGui import QImage, QPixmap, QFont, QTextCursor, QColor, QPalette
 from PySide6.QtWidgets import (
     QApplication,
     QMainWindow,
@@ -29,6 +28,10 @@ from PySide6.QtWidgets import (
     QSplitter,
     QStatusBar,
     QCheckBox,
+    QFrame,
+    QScrollArea,
+    QSizePolicy,
+    QGroupBox,
 )
 from PIL import Image
 
@@ -55,7 +58,24 @@ from config import (
 from vision.vlm_inference import VLMInference
 
 
-# ── Helpers ───────────────────────────────────────────────
+# ── Theme constants ──────────────────────────────────────
+
+DEEP_NAVY = "#0A2463"
+STEEL_BLUE = "#3E92CC"
+OFF_WHITE = "#F0F2F5"
+DARK_BG = "#071A40"
+PANEL_BG = "#0D2B5E"
+BORDER_COLOR = "#1A3A7A"
+TEXT_PRIMARY = "#E8ECF1"
+TEXT_SECONDARY = "#8DA4C7"
+TEXT_MUTED = "#5A7BA8"
+ACCENT_GREEN = "#4CAF50"
+ACCENT_RED = "#E53935"
+ACCENT_YELLOW = "#FFC107"
+ACCENT_BLUE = "#2196F3"
+
+INITIAL_TOKEN_DISPLAY = "0 / 0"
+
 
 def pil_to_qpixmap(pil_image: Image.Image) -> QPixmap:
     if pil_image.mode != "RGB":
@@ -67,7 +87,6 @@ def pil_to_qpixmap(pil_image: Image.Image) -> QPixmap:
 
 
 def _esc(text: str) -> str:
-    """Minimal HTML escaping for log messages."""
     return (
         text.replace("&", "&amp;")
         .replace("<", "&lt;")
@@ -76,146 +95,186 @@ def _esc(text: str) -> str:
     )
 
 
-# ── Status colors ────────────────────────────────────────
-
 STATUS_COLORS = {
-    "IDLE":      "#666680",
-    "LOADING":   "#cfcf5b",
-    "OBSERVING": "#5ba8cf",
-    "PLANNING":  "#5b6acf",
-    "EXECUTING": "#cf8f5b",
-    "WAITING":   "#cfcf5b",
-    "DONE":      "#6fcf6f",
-    "FAILED":    "#cf5b5b",
+    "IDLE":      TEXT_MUTED,
+    "LOADING":   ACCENT_YELLOW,
+    "OBSERVING": STEEL_BLUE,
+    "PLANNING":  ACCENT_BLUE,
+    "EXECUTING": "#FF9800",
+    "WAITING":   ACCENT_YELLOW,
+    "DONE":      ACCENT_GREEN,
+    "FAILED":    ACCENT_RED,
 }
 
 
-STYLESHEET = """
-QMainWindow {
-    background-color: #141522;
-}
-QWidget#central {
-    background-color: #141522;
-}
+STYLESHEET = f"""
+QMainWindow {{
+    background-color: {DARK_BG};
+}}
+QWidget#central {{
+    background-color: {DARK_BG};
+}}
 
-/* ── Input bar ─────────────────────────────────── */
-QLineEdit {
-    background-color: #1e2035;
-    color: #e4e4ef;
-    border: 1px solid #2d2f4a;
-    border-radius: 8px;
-    padding: 10px 14px;
-    font-size: 14px;
-    selection-background-color: #5b6acf;
-}
-QLineEdit:focus {
-    border-color: #5b6acf;
-}
-QLineEdit:disabled {
-    color: #555;
-}
+/* ── Panels ─────────────────────────────────────── */
+QFrame#left_panel, QFrame#center_panel, QFrame#right_panel {{
+    background-color: {PANEL_BG};
+    border: 1px solid {BORDER_COLOR};
+    border-radius: 6px;
+}}
 
-/* ── Buttons ───────────────────────────────────── */
-QPushButton {
+/* ── Input ──────────────────────────────────────── */
+QLineEdit {{
+    background-color: {DARK_BG};
+    color: {TEXT_PRIMARY};
+    border: 1px solid {BORDER_COLOR};
+    border-radius: 6px;
+    padding: 10px 12px;
+    font-size: 13px;
+    selection-background-color: {STEEL_BLUE};
+}}
+QLineEdit:focus {{
+    border-color: {STEEL_BLUE};
+}}
+QLineEdit:disabled {{
+    color: {TEXT_MUTED};
+}}
+
+/* ── Buttons ────────────────────────────────────── */
+QPushButton {{
     border: none;
-    border-radius: 8px;
-    padding: 10px 22px;
+    border-radius: 6px;
+    padding: 10px 20px;
     font-size: 13px;
     font-weight: bold;
-}
-QPushButton#run_btn {
-    background-color: #5b6acf;
+}}
+QPushButton#run_btn {{
+    background-color: {ACCENT_GREEN};
     color: #ffffff;
-}
-QPushButton#run_btn:hover {
-    background-color: #6f7de0;
-}
-QPushButton#run_btn:pressed {
-    background-color: #4a58b5;
-}
-QPushButton#stop_btn {
-    background-color: #cf5b5b;
+}}
+QPushButton#run_btn:hover {{
+    background-color: #66BB6A;
+}}
+QPushButton#run_btn:pressed {{
+    background-color: #388E3C;
+}}
+QPushButton#stop_btn {{
+    background-color: {ACCENT_RED};
     color: #ffffff;
-}
-QPushButton#stop_btn:hover {
-    background-color: #e06f6f;
-}
-QPushButton#stop_btn:pressed {
-    background-color: #b54a4a;
-}
-QPushButton:disabled {
-    background-color: #252740;
-    color: #555;
-}
+}}
+QPushButton#stop_btn:hover {{
+    background-color: #EF5350;
+}}
+QPushButton#stop_btn:pressed {{
+    background-color: #C62828;
+}}
+QPushButton:disabled {{
+    background-color: {BORDER_COLOR};
+    color: {TEXT_MUTED};
+}}
 
-/* ── Log panel ─────────────────────────────────── */
-QTextEdit#log_panel {
-    background-color: #181a2e;
-    color: #c8c8d8;
-    border: 1px solid #252740;
-    border-radius: 8px;
-    padding: 10px;
+/* ── Text panels ────────────────────────────────── */
+QTextEdit {{
+    background-color: {DARK_BG};
+    color: {TEXT_PRIMARY};
+    border: 1px solid {BORDER_COLOR};
+    border-radius: 6px;
+    padding: 8px;
     font-size: 12px;
-}
+}}
 
-/* ── Screenshot label ──────────────────────────── */
-QLabel#screenshot_label {
-    background-color: #181a2e;
-    border: 1px solid #252740;
-    border-radius: 8px;
-}
+/* ── Screenshot label ───────────────────────────── */
+QLabel#screenshot_label {{
+    background-color: {DARK_BG};
+    border: 1px solid {BORDER_COLOR};
+    border-radius: 6px;
+}}
 
-/* ── Status bar ────────────────────────────────── */
-QStatusBar {
-    background-color: #10111e;
-    color: #666680;
-    font-size: 12px;
-    padding: 2px 8px;
-}
-
-/* ── Splitter ──────────────────────────────────── */
-QSplitter::handle {
-    background-color: #252740;
-    width: 2px;
-}
-
-/* ── Section headers ───────────────────────────── */
-QLabel#section_header {
-    color: #8888a8;
+/* ── Status bar ─────────────────────────────────── */
+QStatusBar {{
+    background-color: {DARK_BG};
+    color: {TEXT_MUTED};
     font-size: 11px;
-    font-weight: bold;
-    padding: 4px 0px;
-}
+    padding: 2px 8px;
+    border-top: 1px solid {BORDER_COLOR};
+}}
 
-/* ── Checkbox ──────────────────────────────────── */
-QCheckBox {
-    color: #8888a8;
+/* ── Splitter ───────────────────────────────────── */
+QSplitter::handle {{
+    background-color: {BORDER_COLOR};
+    width: 2px;
+}}
+
+/* ── Section headers ────────────────────────────── */
+QLabel#section_header {{
+    color: {TEXT_SECONDARY};
+    font-size: 10px;
+    font-weight: bold;
+    letter-spacing: 1px;
+    padding: 6px 0px 4px 0px;
+}}
+
+/* ── Checkbox ───────────────────────────────────── */
+QCheckBox {{
+    color: {TEXT_SECONDARY};
     font-size: 12px;
     spacing: 6px;
-}
-QCheckBox::indicator {
+}}
+QCheckBox::indicator {{
     width: 14px;
     height: 14px;
     border-radius: 3px;
-    border: 1px solid #3a3b5e;
-    background-color: #1e2035;
-}
-QCheckBox::indicator:checked {
-    background-color: #5b6acf;
-    border-color: #5b6acf;
-}
+    border: 1px solid {BORDER_COLOR};
+    background-color: {DARK_BG};
+}}
+QCheckBox::indicator:checked {{
+    background-color: {STEEL_BLUE};
+    border-color: {STEEL_BLUE};
+}}
+
+/* ── Labels ─────────────────────────────────────── */
+QLabel#metric_label {{
+    color: {TEXT_SECONDARY};
+    font-size: 11px;
+    padding: 2px 0px;
+}}
+QLabel#metric_value {{
+    color: {TEXT_PRIMARY};
+    font-size: 14px;
+    font-weight: bold;
+    padding: 0px 0px 4px 0px;
+}}
+QLabel#status_label {{
+    font-size: 12px;
+    font-weight: bold;
+    padding: 4px 8px;
+    border-radius: 4px;
+}}
+
+/* ── GroupBox ────────────────────────────────────── */
+QGroupBox {{
+    color: {TEXT_SECONDARY};
+    font-size: 10px;
+    font-weight: bold;
+    border: 1px solid {BORDER_COLOR};
+    border-radius: 6px;
+    margin-top: 8px;
+    padding-top: 14px;
+}}
+QGroupBox::title {{
+    subcontrol-origin: margin;
+    left: 10px;
+    padding: 0 4px;
+}}
 """
 
 
 # ── Status Indicator Widget ──────────────────────────────
 
 class StatusIndicator(QWidget):
-    """Colored dot + label showing the current agent state."""
-
     def __init__(self, parent=None):
         super().__init__(parent)
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(8, 0, 0, 0)
+        layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)
 
         self._dot = QLabel()
@@ -229,7 +288,7 @@ class StatusIndicator(QWidget):
         self.set_status("IDLE")
 
     def set_status(self, status: str):
-        color = STATUS_COLORS.get(status, "#666680")
+        color = STATUS_COLORS.get(status, TEXT_MUTED)
         self._dot.setStyleSheet(
             f"background-color: {color}; border-radius: 5px; border: none;"
         )
@@ -242,14 +301,13 @@ class StatusIndicator(QWidget):
 # ── Model Loader Thread ──────────────────────────────────
 
 class ModelLoader(QThread):
-    """Loads the VLM model in a background thread so the GUI stays responsive."""
     progress = Signal(str)
     finished = Signal(object)
     error = Signal(str)
 
     def run(self):
         try:
-            self.progress.emit("Loading VLM model — this may take a minute ...")
+            self.progress.emit("Loading VLM model -- this may take a minute ...")
             vlm = VLMInference(MODEL_PATH, device=OPENVINO_DEVICE)
             vlm.load()
             self.progress.emit("Building agent controller ...")
@@ -281,12 +339,13 @@ class ModelLoader(QThread):
 # ── Agent Worker Thread ──────────────────────────────────
 
 class AgentWorker(QThread):
-    """Runs the agent loop in a background thread, emitting Qt signals for each event."""
     step_started = Signal(int, int)
     screenshot_ready = Signal(object, object)
     thought_ready = Signal(str)
     action_done = Signal(str, str)
+    plan_ready = Signal(dict)
     step_complete = Signal(dict)
+    iteration_detail = Signal(dict)
     task_complete = Signal(dict)
     error_occurred = Signal(str)
     status_changed = Signal(str)
@@ -303,7 +362,9 @@ class AgentWorker(QThread):
                 on_screenshot=self.screenshot_ready.emit,
                 on_thought=self.thought_ready.emit,
                 on_action=self.action_done.emit,
+                on_plan_ready=self.plan_ready.emit,
                 on_step_complete=self.step_complete.emit,
+                on_iteration_detail=self.iteration_detail.emit,
                 on_task_complete=self.task_complete.emit,
                 on_error=self.error_occurred.emit,
                 on_status_change=self.status_changed.emit,
@@ -322,13 +383,16 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("OpenVINO GUI Agent")
-        self.resize(1280, 780)
-        self.setMinimumSize(QSize(900, 560))
+        self.resize(1440, 860)
+        self.setMinimumSize(QSize(1100, 640))
 
         self._controller: AgentController | None = None
         self._worker: AgentWorker | None = None
         self._current_pixmap: QPixmap | None = None
         self._step_count = 0
+        self._total_tokens_in = 0
+        self._total_tokens_out = 0
+        self._task_start_time = 0.0
 
         self._build_ui()
         self.setStyleSheet(STYLESHEET)
@@ -342,55 +406,186 @@ class MainWindow(QMainWindow):
         central.setObjectName("central")
         self.setCentralWidget(central)
         root = QVBoxLayout(central)
-        root.setContentsMargins(16, 14, 16, 8)
-        root.setSpacing(10)
+        root.setContentsMargins(10, 8, 10, 4)
+        root.setSpacing(8)
 
-        # Title row
+        # Title bar
         title_row = QHBoxLayout()
+        title_row.setSpacing(12)
         title = QLabel("OpenVINO GUI Agent")
-        title.setStyleSheet("color: #e4e4ef; font-size: 18px; font-weight: bold;")
+        title.setStyleSheet(
+            f"color: {TEXT_PRIMARY}; font-size: 16px; font-weight: bold; border: none;"
+        )
         title_row.addWidget(title)
+
+        version_label = QLabel("v1.0 MVP")
+        version_label.setStyleSheet(
+            f"color: {TEXT_MUTED}; font-size: 11px; border: none; padding-top: 3px;"
+        )
+        title_row.addWidget(version_label)
         title_row.addStretch()
+
         self.status_indicator = StatusIndicator()
         title_row.addWidget(self.status_indicator)
         root.addLayout(title_row)
 
-        # ── Input row ─────────────────────────────────────
-        input_row = QHBoxLayout()
-        input_row.setSpacing(8)
+        # Main 3-panel splitter
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter.setHandleWidth(3)
+
+        # LEFT PANEL -- User Control
+        left_panel = self._build_left_panel()
+        splitter.addWidget(left_panel)
+
+        # CENTER PANEL -- Live Screen
+        center_panel = self._build_center_panel()
+        splitter.addWidget(center_panel)
+
+        # RIGHT PANEL -- Agent Reasoning
+        right_panel = self._build_right_panel()
+        splitter.addWidget(right_panel)
+
+        splitter.setStretchFactor(0, 1)
+        splitter.setStretchFactor(1, 3)
+        splitter.setStretchFactor(2, 2)
+        splitter.setSizes([260, 600, 400])
+
+        root.addWidget(splitter, stretch=1)
+
+        # Status bar
+        self.status_bar = QStatusBar()
+        self.setStatusBar(self.status_bar)
+        self.status_bar.showMessage("Initializing ...")
+
+    def _build_left_panel(self) -> QFrame:
+        panel = QFrame()
+        panel.setObjectName("left_panel")
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(10)
+
+        # Section header
+        header = QLabel("CONTROL")
+        header.setObjectName("section_header")
+        layout.addWidget(header)
+
+        # Instruction input
+        instr_label = QLabel("Instruction")
+        instr_label.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 11px; border: none;")
+        layout.addWidget(instr_label)
 
         self.instruction_input = QLineEdit()
-        self.instruction_input.setPlaceholderText(
-            'Enter instruction  (e.g. "open calculator and compute 42 \u00d7 7")'
-        )
+        self.instruction_input.setPlaceholderText('e.g. "open calculator and compute 42 x 7"')
         self.instruction_input.returnPressed.connect(self._on_run)
-        input_row.addWidget(self.instruction_input, stretch=1)
+        layout.addWidget(self.instruction_input)
+
+        # Run / Stop buttons
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(8)
 
         self.run_btn = QPushButton("Run")
         self.run_btn.setObjectName("run_btn")
         self.run_btn.clicked.connect(self._on_run)
-        input_row.addWidget(self.run_btn)
+        btn_row.addWidget(self.run_btn)
 
         self.stop_btn = QPushButton("Stop")
         self.stop_btn.setObjectName("stop_btn")
         self.stop_btn.clicked.connect(self._on_stop)
-        input_row.addWidget(self.stop_btn)
+        btn_row.addWidget(self.stop_btn)
 
-        root.addLayout(input_row)
+        layout.addLayout(btn_row)
 
-        # ── Main split: screenshot | log ──────────────────
-        splitter = QSplitter(Qt.Orientation.Horizontal)
-        splitter.setHandleWidth(3)
+        # Separator
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.HLine)
+        sep.setStyleSheet(f"background-color: {BORDER_COLOR}; border: none; max-height: 1px;")
+        layout.addWidget(sep)
 
-        # Left — Screenshot
-        left_frame = QWidget()
-        left_layout = QVBoxLayout(left_frame)
-        left_layout.setContentsMargins(0, 0, 0, 0)
-        left_layout.setSpacing(4)
+        # Metrics
+        metrics_header = QLabel("METRICS")
+        metrics_header.setObjectName("section_header")
+        layout.addWidget(metrics_header)
 
-        lbl_screen = QLabel("LIVE SCREEN")
-        lbl_screen.setObjectName("section_header")
-        left_layout.addWidget(lbl_screen)
+        # Iteration counter
+        self.iter_label = QLabel("Iteration")
+        self.iter_label.setObjectName("metric_label")
+        layout.addWidget(self.iter_label)
+        self.iter_value = QLabel(INITIAL_TOKEN_DISPLAY)
+        self.iter_value.setObjectName("metric_value")
+        layout.addWidget(self.iter_value)
+
+        # Status display
+        self.status_label_text = QLabel("Status")
+        self.status_label_text.setObjectName("metric_label")
+        layout.addWidget(self.status_label_text)
+        self.status_display = QLabel("IDLE")
+        self.status_display.setObjectName("status_label")
+        self.status_display.setStyleSheet(
+            f"color: {TEXT_MUTED}; background-color: {DARK_BG}; "
+            f"border: 1px solid {BORDER_COLOR}; border-radius: 4px; padding: 4px 8px;"
+        )
+        layout.addWidget(self.status_display)
+
+        # Token usage
+        self.token_label = QLabel("Tokens (in / out)")
+        self.token_label.setObjectName("metric_label")
+        layout.addWidget(self.token_label)
+        self.token_value = QLabel(INITIAL_TOKEN_DISPLAY)
+        self.token_value.setObjectName("metric_value")
+        layout.addWidget(self.token_value)
+
+        # Generation speed
+        self.speed_label = QLabel("Speed")
+        self.speed_label.setObjectName("metric_label")
+        layout.addWidget(self.speed_label)
+        self.speed_value = QLabel("-- tok/s")
+        self.speed_value.setObjectName("metric_value")
+        layout.addWidget(self.speed_value)
+
+        # Iteration time
+        self.time_label = QLabel("Iteration Time")
+        self.time_label.setObjectName("metric_label")
+        layout.addWidget(self.time_label)
+        self.time_value = QLabel("--")
+        self.time_value.setObjectName("metric_value")
+        layout.addWidget(self.time_value)
+
+        # Elements count
+        self.elem_label = QLabel("UI Elements")
+        self.elem_label.setObjectName("metric_label")
+        layout.addWidget(self.elem_label)
+        self.elem_value = QLabel("0")
+        self.elem_value.setObjectName("metric_value")
+        layout.addWidget(self.elem_value)
+
+        layout.addStretch()
+
+        # Options
+        sep2 = QFrame()
+        sep2.setFrameShape(QFrame.Shape.HLine)
+        sep2.setStyleSheet(f"background-color: {BORDER_COLOR}; border: none; max-height: 1px;")
+        layout.addWidget(sep2)
+
+        self.debug_cb = QCheckBox("Debug mode")
+        self.debug_cb.setChecked(DEBUG_MODE)
+        layout.addWidget(self.debug_cb)
+
+        self.show_reasoning_cb = QCheckBox("Show reasoning")
+        self.show_reasoning_cb.setChecked(True)
+        layout.addWidget(self.show_reasoning_cb)
+
+        return panel
+
+    def _build_center_panel(self) -> QFrame:
+        panel = QFrame()
+        panel.setObjectName("center_panel")
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(4)
+
+        header = QLabel("LIVE SCREEN + GROUNDING")
+        header.setObjectName("section_header")
+        layout.addWidget(header)
 
         self.screenshot_label = QLabel()
         self.screenshot_label.setObjectName("screenshot_label")
@@ -398,48 +593,31 @@ class MainWindow(QMainWindow):
         self.screenshot_label.setMinimumSize(QSize(400, 300))
         self.screenshot_label.setText("No screenshot yet")
         self.screenshot_label.setStyleSheet(
-            self.screenshot_label.styleSheet() + " color: #555;"
+            self.screenshot_label.styleSheet() + f" color: {TEXT_MUTED};"
         )
-        left_layout.addWidget(self.screenshot_label, stretch=1)
+        layout.addWidget(self.screenshot_label, stretch=1)
 
-        splitter.addWidget(left_frame)
+        return panel
 
-        # Right — Log
-        right_frame = QWidget()
-        right_layout = QVBoxLayout(right_frame)
-        right_layout.setContentsMargins(0, 0, 0, 0)
-        right_layout.setSpacing(4)
+    def _build_right_panel(self) -> QFrame:
+        panel = QFrame()
+        panel.setObjectName("right_panel")
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(4)
 
-        # Header row: label + toggle
-        log_header = QHBoxLayout()
-        log_header.setSpacing(0)
-        lbl_log = QLabel("AGENT LOG")
-        lbl_log.setObjectName("section_header")
-        log_header.addWidget(lbl_log)
-        log_header.addStretch()
-        self.show_reasoning_cb = QCheckBox("Show reasoning")
-        self.show_reasoning_cb.setChecked(True)
-        log_header.addWidget(self.show_reasoning_cb)
-        right_layout.addLayout(log_header)
+        header = QLabel("AGENT REASONING")
+        header.setObjectName("section_header")
+        layout.addWidget(header)
 
-        self.log_panel = QTextEdit()
-        self.log_panel.setObjectName("log_panel")
-        self.log_panel.setReadOnly(True)
+        self.reasoning_panel = QTextEdit()
+        self.reasoning_panel.setReadOnly(True)
         mono = QFont("Cascadia Code", 10)
         mono.setStyleHint(QFont.StyleHint.Monospace)
-        self.log_panel.setFont(mono)
-        right_layout.addWidget(self.log_panel, stretch=1)
+        self.reasoning_panel.setFont(mono)
+        layout.addWidget(self.reasoning_panel, stretch=1)
 
-        splitter.addWidget(right_frame)
-        splitter.setStretchFactor(0, 3)
-        splitter.setStretchFactor(1, 2)
-
-        root.addWidget(splitter, stretch=1)
-
-        # ── Status bar ────────────────────────────────────
-        self.status_bar = QStatusBar()
-        self.setStatusBar(self.status_bar)
-        self.status_bar.showMessage("Initializing ...")
+        return panel
 
     # ── UI state machine ──────────────────────────────────
 
@@ -471,14 +649,14 @@ class MainWindow(QMainWindow):
         self._controller = controller
         self._set_ui_state("idle")
         self.status_indicator.set_status("IDLE")
-        self.status_bar.showMessage("Ready — enter an instruction and press Run")
+        self.status_bar.showMessage("Ready -- enter an instruction and press Run")
         self._log_system("Model loaded. Agent ready.")
 
     @Slot(str)
     def _on_load_error(self, msg: str):
         self.status_indicator.set_status("FAILED")
         self.status_bar.showMessage(f"Load error: {msg}")
-        self._log_error(f"Failed to load model: {msg}")
+        self._log_error("Model", f"Failed to load model: {msg}")
 
     # ── Run / Stop ────────────────────────────────────────
 
@@ -489,7 +667,15 @@ class MainWindow(QMainWindow):
             return
         self._set_ui_state("running")
         self._step_count = 0
-        self.log_panel.clear()
+        self._total_tokens_in = 0
+        self._total_tokens_out = 0
+        self._task_start_time = time.time()
+        self.reasoning_panel.clear()
+        self.iter_value.setText(f"0 / {MAX_ITERATIONS}")
+        self.token_value.setText(INITIAL_TOKEN_DISPLAY)
+        self.speed_value.setText("-- tok/s")
+        self.time_value.setText("--")
+        self.elem_value.setText("0")
         self._log_system(f"Task: {instruction}")
         self.status_bar.showMessage("Running ...")
 
@@ -498,7 +684,9 @@ class MainWindow(QMainWindow):
         self._worker.screenshot_ready.connect(self._on_screenshot)
         self._worker.thought_ready.connect(self._on_thought)
         self._worker.action_done.connect(self._on_action)
+        self._worker.plan_ready.connect(self._on_plan_ready)
         self._worker.step_complete.connect(self._on_step_complete)
+        self._worker.iteration_detail.connect(self._on_iteration_detail)
         self._worker.task_complete.connect(self._on_task_complete)
         self._worker.error_occurred.connect(self._on_agent_error)
         self._worker.status_changed.connect(self._on_status_change)
@@ -509,17 +697,24 @@ class MainWindow(QMainWindow):
     def _on_stop(self):
         if self._worker is not None:
             self._worker.stop()
-            self._log_system("Stop requested — waiting for current step to finish ...")
+            self._log_system("Stop requested -- waiting for current step to finish ...")
 
     # ── Agent event slots ─────────────────────────────────
 
     @Slot(str)
     def _on_status_change(self, status: str):
         self.status_indicator.set_status(status)
+        color = STATUS_COLORS.get(status, TEXT_MUTED)
+        self.status_display.setText(status)
+        self.status_display.setStyleSheet(
+            f"color: {color}; background-color: {DARK_BG}; "
+            f"border: 1px solid {color}; border-radius: 4px; padding: 4px 8px;"
+        )
 
     @Slot(int, int)
     def _on_step_start(self, step: int, max_steps: int):
         self._step_count = step
+        self.iter_value.setText(f"{step} / {max_steps}")
         self.status_bar.showMessage(f"Step {step} / {max_steps}")
         self._log_step_header(step, max_steps)
 
@@ -534,6 +729,11 @@ class MainWindow(QMainWindow):
         if self.show_reasoning_cb.isChecked():
             self._log_thought(thought)
 
+    @Slot(dict)
+    def _on_plan_ready(self, plan_data: dict):
+        if self.show_reasoning_cb.isChecked():
+            self._log_plan(plan_data)
+
     @Slot(str, str)
     def _on_action(self, desc: str, result: str):
         self._log_action(desc, result)
@@ -545,11 +745,32 @@ class MainWindow(QMainWindow):
         elems = data.get("elements", 0)
         changed = data.get("screen_changed", True)
         step = data.get("step", self._step_count)
+        iter_time = data.get("iteration_time", 0)
+        in_tok = data.get("input_tokens", 0)
+        out_tok = data.get("output_tokens", 0)
 
-        parts = [f"Step {step}", f"{elems} elements", f"{gen_time}s", f"{tps} tok/s"]
+        self._total_tokens_in += in_tok
+        self._total_tokens_out += out_tok
+
+        self.token_value.setText(f"{self._total_tokens_in} / {self._total_tokens_out}")
+        self.speed_value.setText(f"{tps} tok/s")
+        self.time_value.setText(f"{iter_time}s")
+        self.elem_value.setText(str(elems))
+
+        parts = [f"Step {step}", f"{elems} elem", f"{gen_time}s", f"{tps} tok/s"]
         if not changed:
             parts.append("no screen change")
         self.status_bar.showMessage("  |  ".join(parts))
+
+        # Show errors in reasoning panel
+        errors = data.get("errors", [])
+        for err in errors:
+            self._log_error(err.get("category", "unknown"), err.get("message", ""))
+
+    @Slot(dict)
+    def _on_iteration_detail(self, data: dict):
+        # Reserved for future per-iteration detail rendering
+        _ = data
 
     @Slot(dict)
     def _on_task_complete(self, result: dict):
@@ -558,70 +779,90 @@ class MainWindow(QMainWindow):
         usage = result.get("token_usage", {})
         tps = usage.get("avg_tokens_per_second", 0)
         total_t = usage.get("total_generation_time", 0)
+        total_in = usage.get("total_input_tokens", 0)
+        total_out = usage.get("total_output_tokens", 0)
 
         if status == "completed":
-            color = "#6fcf6f"
-            icon = "DONE"
+            color = ACCENT_GREEN
+            label = "COMPLETED"
         elif status == "stopped":
-            color = "#cfcf5b"
-            icon = "STOPPED"
+            color = ACCENT_YELLOW
+            label = "STOPPED"
         else:
-            color = "#cf5b5b"
-            icon = "INCOMPLETE"
+            color = ACCENT_RED
+            label = "INCOMPLETE"
+
+        self.token_value.setText(f"{total_in} / {total_out}")
 
         self._log_html(
-            f'<br><p style="color:{color}; font-weight:bold; margin:8px 0 2px 0;">'
-            f'{icon} — Task {status} in {steps} step(s)  '
-            f'({total_t}s total, {tps} tok/s avg)</p>'
+            f'<br><div style="border-left: 3px solid {color}; padding: 6px 12px; margin: 8px 0;">'
+            f'<p style="color:{color}; font-weight:bold; margin:0;">'
+            f'{label} -- {steps} step(s), {total_t}s total, {tps} tok/s avg</p></div>'
         )
         self.status_bar.showMessage(
-            f"{icon}  |  {steps} steps  |  {total_t}s  |  {tps} tok/s"
+            f"{label}  |  {steps} steps  |  {total_t}s  |  {tps} tok/s"
         )
 
     @Slot(str)
     def _on_agent_error(self, msg: str):
-        self._log_error(msg)
+        self._log_error("agent", msg)
 
     @Slot()
     def _on_worker_finished(self):
         self._set_ui_state("idle")
 
-    # ── Log helpers ───────────────────────────────────────
+    # ── Log helpers (reasoning panel) ─────────────────────
 
     def _log_html(self, html: str):
-        self.log_panel.moveCursor(QTextCursor.MoveOperation.End)
-        self.log_panel.insertHtml(html)
-        self.log_panel.moveCursor(QTextCursor.MoveOperation.End)
+        self.reasoning_panel.moveCursor(QTextCursor.MoveOperation.End)
+        self.reasoning_panel.insertHtml(html)
+        self.reasoning_panel.moveCursor(QTextCursor.MoveOperation.End)
 
     def _log_system(self, text: str):
         self._log_html(
-            f'<p style="color:#6688aa; margin:2px 0;">{_esc(text)}</p>'
+            f'<p style="color:{TEXT_MUTED}; margin:2px 0;">{_esc(text)}</p>'
         )
 
-    def _log_error(self, text: str):
+    def _log_error(self, category: str, text: str):
         self._log_html(
-            f'<p style="color:#cf5b5b; margin:2px 0;">'
-            f'<span style="color:#cf5b5b;">\u26a0</span> {_esc(text)}</p>'
+            f'<div style="border-left: 3px solid {ACCENT_RED}; padding: 4px 10px; margin: 4px 0;">'
+            f'<p style="color:{ACCENT_RED}; margin:0;">'
+            f'<b>[{_esc(category.upper())}]</b> {_esc(text)}</p></div>'
         )
 
     def _log_step_header(self, step: int, max_steps: int):
         self._log_html(
-            f'<p style="color:#5b6acf; font-weight:bold; margin:10px 0 2px 0;">'
-            f'[Step {step}/{max_steps}]</p>'
+            f'<div style="border-top: 1px solid {BORDER_COLOR}; margin-top: 10px; padding-top: 8px;">'
+            f'<p style="color:{STEEL_BLUE}; font-weight:bold; margin:0;">'
+            f'Iteration {step} / {max_steps}</p></div>'
         )
 
     def _log_thought(self, thought: str):
         self._log_html(
-            f'<p style="color:#c8c8d8; margin:1px 0 1px 12px;">'
-            f'<span style="color:#7878a8;">Thought:</span> {_esc(thought)}</p>'
+            f'<div style="margin: 4px 0 4px 8px;">'
+            f'<p style="color:{TEXT_SECONDARY}; margin:0 0 2px 0; font-size:10px;">THOUGHT</p>'
+            f'<p style="color:{TEXT_PRIMARY}; margin:0 0 0 4px;">{_esc(thought)}</p></div>'
+        )
+
+    def _log_plan(self, plan_data: dict):
+        actions = plan_data.get("actions", [])
+        if not actions:
+            return
+        plan_json = json.dumps(actions, indent=2)
+        self._log_html(
+            f'<div style="margin: 4px 0 4px 8px;">'
+            f'<p style="color:{TEXT_SECONDARY}; margin:0 0 2px 0; font-size:10px;">ACTION PLAN</p>'
+            f'<pre style="color:{ACCENT_BLUE}; margin:0 0 0 4px; font-size:11px;">'
+            f'{_esc(plan_json)}</pre></div>'
         )
 
     def _log_action(self, desc: str, result: str):
         self._log_html(
-            f'<p style="color:#6fcf6f; margin:1px 0 1px 12px;">'
-            f'<span style="color:#7878a8;">Action:</span> {_esc(desc)}</p>'
-            f'<p style="color:#5ba8cf; margin:1px 0 1px 24px;">'
-            f'<span style="color:#7878a8;">\u2192</span> {_esc(result)}</p>'
+            f'<div style="margin: 4px 0 4px 8px;">'
+            f'<p style="color:{TEXT_SECONDARY}; margin:0 0 2px 0; font-size:10px;">EXECUTED</p>'
+            f'<p style="color:{ACCENT_GREEN}; margin:0 0 0 4px;">{_esc(desc)}</p>'
+            f'<p style="color:{TEXT_SECONDARY}; margin:0 0 0 4px; font-size:10px;">RESULT</p>'
+            f'<p style="color:{TEXT_PRIMARY}; margin:0 0 0 4px;">{_esc(result)}</p></div>'
         )
 
     # ── Screenshot display ────────────────────────────────

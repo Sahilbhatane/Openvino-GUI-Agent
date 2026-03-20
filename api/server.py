@@ -14,6 +14,7 @@ from agent.executor import Executor
 from agent.planner import Planner
 from config import (
     ACTION_DELAY_SECONDS,
+    BLOCK_DANGEROUS_ACTIONS,
     CURSOR_MOVE_DURATION,
     DEBUG_MODE,
     DEBUG_SCREENSHOT_DIR,
@@ -35,7 +36,6 @@ from vision.vlm_inference import VLMInference
 
 log = get_logger("api")
 
-# Shared state populated at startup
 _controller: AgentController | None = None
 
 
@@ -53,6 +53,7 @@ async def lifespan(app: FastAPI):
         action_delay=ACTION_DELAY_SECONDS,
         failsafe=PYAUTOGUI_FAILSAFE,
         cursor_move_duration=CURSOR_MOVE_DURATION,
+        block_dangerous=BLOCK_DANGEROUS_ACTIONS,
     )
     _controller = AgentController(
         planner=planner,
@@ -75,8 +76,6 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="OpenVINO GUI Agent MVP", lifespan=lifespan)
 
 
-# ── request / response schemas ────────────────────────────
-
 class TaskRequest(BaseModel):
     instruction: str
 
@@ -88,8 +87,6 @@ class TaskResponse(BaseModel):
     token_usage: dict = {}
     history: list
 
-
-# ── endpoints ─────────────────────────────────────────────
 
 @app.post("/run-task", response_model=TaskResponse, responses={503: {"description": "Agent not yet initialized"}})
 async def run_task(req: TaskRequest):

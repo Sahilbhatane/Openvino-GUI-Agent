@@ -23,6 +23,10 @@ ACTION_DELAY_SECONDS = 0.3
 CURSOR_MOVE_DURATION = 0.2  # animate cursor before click
 HIGHLIGHT_DURATION = 0.3    # show target highlight before executing
 MAX_PLAN_RETRIES = 1        # retry VLM if first response has no valid action
+BLOCK_DANGEROUS_ACTIONS = True
+
+# ── Screen capture ───────────────────────────────────────
+MAX_VLM_DIMENSION = 1280
 
 # ── Debug ─────────────────────────────────────────────────
 DEBUG_MODE = True
