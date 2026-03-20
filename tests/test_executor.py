@@ -59,7 +59,9 @@ class TestExecutorSafety:
         executor = Executor(block_dangerous=True)
         action = Action(type=ActionType.TYPE, text="rm -rf /")
         result = executor.execute_single(action)
-        assert "BLOCKED" in result
+        assert isinstance(result, ExecutionResult)
+        assert "BLOCKED" in result.description
+        assert result.success is False
 
     @patch("pyautogui.moveTo")
     @patch("pyautogui.click")
@@ -67,6 +69,8 @@ class TestExecutorSafety:
         executor = Executor(block_dangerous=True)
         action = Action(type=ActionType.CLICK, x=100, y=200)
         result = executor.execute_single(action)
-        assert "click" in result
+        assert isinstance(result, ExecutionResult)
+        assert "click" in result.description
+        assert result.success is True
         mock_move.assert_called_once()
         mock_click.assert_called_once()

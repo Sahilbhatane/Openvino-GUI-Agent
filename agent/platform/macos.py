@@ -36,8 +36,6 @@ class MacOSAccessibility:
                 AXUIElementCreateSystemWide,
                 AXUIElementCopyAttributeValue,
             )
-            from CoreFoundation import CFRelease
-            import Quartz
         except ImportError:
             log.warning(
                 "pyobjc not installed. Install via: "

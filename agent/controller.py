@@ -20,12 +20,12 @@ from collections import deque
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable
 
 import numpy as np
 from PIL import Image
 
-from agent.errors import AgentError, ErrorCategory, StepErrors
+from agent.errors import ErrorCategory, StepErrors
 from agent.executor import Executor
 from agent.planner import Planner
 from agent.screen_analyzer import ScreenAnalyzer, build_element_map, build_elements_text
@@ -357,13 +357,15 @@ class AgentController:
 
             # 7. Execute ONE action
             result = self.executor.execute_single(action, element_map=elem_map)
-            self._emit(callbacks, "on_action", action_desc, result)
+            if not result.success and result.error is not None:
+                step_errors.errors.append(result.error)
+            self._emit(callbacks, "on_action", action_desc, result.description)
 
             # 8. Post-execution overlay
             action_done_overlay = draw_action_overlay(
                 screenshot, elements,
                 target_element_id=action.element,
-                action_text=f"Step {step}: {result}",
+                action_text=f"Step {step}: {result.description}",
             )
             self._emit(callbacks, "on_screenshot", screenshot, action_done_overlay)
 
@@ -373,7 +375,7 @@ class AgentController:
                 step=step,
                 thought=plan.thought,
                 action_desc=action_desc,
-                result=result,
+                result=result.description,
                 screen_changed=screen_changed,
             ))
 
@@ -382,7 +384,7 @@ class AgentController:
                 "step": step,
                 "thought": plan.thought,
                 "actions": [action.model_dump()],
-                "results": [result],
+                "results": [result.to_dict()],
                 "elements": len(elements),
                 "screen_changed": screen_changed,
                 "iteration_time": round(step_elapsed, 2),
@@ -390,7 +392,7 @@ class AgentController:
                 **token_info,
             }
 
-            action_log = [{"action": action.model_dump(), "result": result}]
+            action_log = [{"action": action.model_dump(), "result": result.to_dict()}]
             self._save_debug_artifacts(step, screenshot, annotated, plan_data, action_log)
 
             history.append(step_data)
