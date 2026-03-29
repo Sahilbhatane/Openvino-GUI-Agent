@@ -57,7 +57,7 @@ def main() -> None:
     print()
 
     for step in result.get("history", []):
-        it = step.get("iteration", "?")
+        it = step.get("step", step.get("iteration", "?"))
         thought = step.get("thought", "")
         actions = step.get("actions", [])
         results = step.get("results", [])

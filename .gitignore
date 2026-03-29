@@ -1,6 +1,8 @@
+.worktrees/
 venv/
 models/Phi-3.5-vision-instruct-int4-ov/
 debug_screenshots/
 __pycache__/
 *.pyc
 .env
+.cursor/
