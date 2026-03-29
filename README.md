@@ -4,34 +4,93 @@ A cross-platform desktop GUI agent powered by a local Vision-Language Model (Phi
 
 ## Architecture
 
-The agent follows a strict **Perception -> Planning -> Action -> Feedback** loop:
+End-to-end data flow (device and model are configurable in `config.py`; default model path is under `models/`):
 
+```mermaid
+flowchart LR
+  subgraph input [Input]
+    UserInstr[User instruction]
+    GUI[Desktop GUI or API]
+  end
+  subgraph perception [Perception]
+    Cap[Screen capture mss]
+    A11y[Accessibility tree]
+    SoM[SoM overlay image]
+  end
+  subgraph infer [OpenVINO]
+    VLM["Phi-3.5 Vision INT4 OV"]
+  end
+  subgraph act [Action]
+    Plan[JSON action plan]
+    Safe[Safety filter]
+    Exec[PyAutoGUI executor]
+    Verif[Screen diff + memory]
+  end
+  UserInstr --> GUI
+  GUI --> Cap
+  GUI --> A11y
+  Cap --> SoM
+  SoM --> VLM
+  A11y --> VLM
+  VLM --> Plan
+  Plan --> Safe
+  Safe --> Exec
+  Exec --> Verif
+  Verif --> Cap
 ```
-User Instruction
-      |
-      v
-[1. Screen Capture] -----> mss (cross-platform)
-      |
-[2. Accessibility]  -----> pywinauto (Win) / AT-SPI (Linux) / AXUIElement (macOS)
-      |
-[3. Grounding]      -----> Set-of-Marks overlay (numbered badges on screenshot)
-      |
-[4. VLM Planning]   -----> OpenVINO Phi-3.5 Vision INT4 -> JSON action plan
-      |
-[5. Safety Check]   -----> Dangerous action blocking, action limits
-      |
-[6. Execution]      -----> PyAutoGUI with fallback strategies
-      |
-[7. Feedback]       -----> Screen diff detection, retry if stuck
-      |
-      v
-  Loop or Done
-```
+
+**Perception → Planning → Action → Feedback** (same pipeline in prose):
+
+| Stage | Component |
+|-------|-----------|
+| Capture | `vision/screen_capture.py` (mss) |
+| Accessibility | `agent/screen_analyzer.py` + `agent/platform/*` |
+| Grounding | `vision/som_overlay.py` (numbered badges) |
+| Planning | `vision/vlm_inference.py` + `agent/planner.py` (OpenVINO VLM → JSON) |
+| Safety | `agent/safety.py` |
+| Execution | `agent/executor.py` (PyAutoGUI + fallbacks) |
+| Feedback | Screen diff, short-term memory, reflection hints on failure (`agent/controller.py`) |
+
+See **[docs/MODEL_ROLES.md](docs/MODEL_ROLES.md)** for why a **single** VLM handles both perception and plan JSON today.
+
+## What you can do (user-visible)
+
+Typical tasks the agent is **designed** to attempt (success depends on OS, apps, and model behavior):
+
+1. **Open applications** by name via search/Start menu flows (e.g. “open Calculator”).
+2. **Click** numbered controls using Set-of-Marks + accessibility grounding.
+3. **Type text** into focused fields or element-targeted inputs.
+4. **Press keys / hotkeys** where allowed by the safety layer (dangerous combos blocked).
+5. **Scroll** and **wait** as intermediate steps in a multi-step instruction.
+6. **Run multi-step instructions** until done or iteration limit — each step is one VLM call plus one executed action.
+7. **Observe progress** in the 3-panel UI: live SoM view, thought, JSON plan, execution result.
+8. **Stop safely** with the Stop button or PyAutoGUI failsafe (mouse to top-left corner when enabled).
+9. **Use CLI or HTTP API** for the same loop without the full GUI (`cli_agent.py`, `main.py`).
+10. **Inspect runs** with optional debug artifacts under `debug_screenshots/` when `DEBUG_MODE` is on.
+
+## Limitations (honest scope)
+
+- **Multi-monitor:** primary capture / focus assumptions may mis-target windows on secondary displays.
+- **Elevated or protected UIs:** admin prompts, secure desktop, and some fullscreen apps may block automation.
+- **Games / GPU-exclusive fullscreen / DRM:** generally unsuitable; not a focus of this prototype.
+- **Heavy or slow VLM:** real-time gaming-style control is unrealistic; latency is model- and device-dependent.
+- **Locale and layout:** UI text and control positions change with language, theme, and DPI scaling.
+- **Single action per VLM step:** the planner returns one action per iteration to keep behavior traceable.
+- **Safety blocks:** some system shells and dangerous patterns are intentionally rejected.
+
+## Documentation map
+
+| Doc | Purpose |
+|-----|---------|
+| [scenarios/SCENARIOS.md](scenarios/SCENARIOS.md) | 3–5 reproducible scenarios, pass criteria, **test run record** template |
+| [docs/BENCHMARKS.md](docs/BENCHMARKS.md) | How to measure latency/memory and **record** benchmark runs |
+| [docs/DEMO_RECORDING.md](docs/DEMO_RECORDING.md) | Step-by-step **screen recording** checklist (OpenVINO visible) |
+| [docs/MODEL_ROLES.md](docs/MODEL_ROLES.md) | Single VLM vs optional future planner LLM |
 
 ## Features
 
 - **Cross-platform**: Windows, Linux, macOS accessibility backends
-- **Local inference**: Runs entirely on CPU via OpenVINO (no cloud API needed)
+- **Local inference**: Phi-3.5 Vision via OpenVINO on `CPU`, `GPU`, or `AUTO` (`OPENVINO_DEVICE` in `config.py`; no cloud API required)
 - **Observable**: 3-panel UI shows live screen, agent reasoning, and control metrics
 - **Safety system**: Blocks dangerous commands (rm -rf, format, shutdown), hotkeys (Alt+F4), and executables (powershell, cmd)
 - **Structured errors**: Every error is categorized (model/execution/os/grounding/safety) with recovery info
@@ -110,6 +169,12 @@ OpenVINO GUI-Agent/
 │   └── som_overlay.py         # Set-of-Marks badge drawing
 ├── utils/
 │   └── logger.py              # Shared logging
+├── docs/
+│   ├── BENCHMARKS.md         # Latency/memory methodology
+│   ├── DEMO_RECORDING.md     # Demo video checklist
+│   └── MODEL_ROLES.md        # VLM vs planner LLM
+├── scenarios/
+│   └── SCENARIOS.md           # Reproducible evaluation scenarios
 ├── tests/
 │   ├── test_planner.py        # JSON parsing tests (12 cases)
 │   ├── test_executor.py       # Element resolution + safety tests
@@ -163,11 +228,30 @@ All tunables are in `config.py`:
 | Linux | AT-SPI (pyatspi) | `sudo apt install python3-pyatspi` |
 | macOS | AXUIElement | `pip install pyobjc-framework-ApplicationServices pyobjc-framework-Quartz pyobjc-framework-Cocoa` |
 
-## Running Tests
+## Running tests
+
+**Automated (required after code changes):**
 
 ```bash
 python -m pytest tests/ -v
 ```
+
+**How to record that you ran tests**
+
+1. Run the command above from the repository root.
+2. Copy the final summary line (e.g. `X passed`) into your PR or notes.
+3. Optional: `python -m pytest tests/ -v --tb=short > test_run_log.txt` and attach `test_run_log.txt`.
+
+**Manual / scenario testing**
+
+1. Pick a scenario in [scenarios/SCENARIOS.md](scenarios/SCENARIOS.md).
+2. Follow **How to run a scenario test** in that file.
+3. Fill the **Test run record** template at the bottom of `scenarios/SCENARIOS.md` for each run.
+
+**Benchmark / demo**
+
+- Benchmark procedure: [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
+- Demo recording: [docs/DEMO_RECORDING.md](docs/DEMO_RECORDING.md).
 
 ## Debug Output
 

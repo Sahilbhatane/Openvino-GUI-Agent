@@ -30,15 +30,26 @@ def capture_screen() -> Image.Image:
 
 
 def capture_screen_with_metadata() -> tuple[Image.Image, dict]:
-    """Return the screenshot plus monitor geometry for coordinate mapping."""
+    """Return the screenshot plus geometry for coordinate mapping.
+
+    ``width`` / ``height`` match the returned PIL image (after downscaling).
+    ``monitor_*`` fields describe the full capture region before scale.
+    """
     with mss.mss() as sct:
         monitor = sct.monitors[1]
         raw = sct.grab(monitor)
         img = Image.frombytes("RGB", raw.size, raw.rgb)
+        scaled = _downscale(img)
+        sx = scaled.width / raw.size[0] if raw.size[0] else 1.0
+        sy = scaled.height / raw.size[1] if raw.size[1] else 1.0
         meta = {
-            "width": monitor["width"],
-            "height": monitor["height"],
+            "width": scaled.width,
+            "height": scaled.height,
             "left": monitor["left"],
             "top": monitor["top"],
+            "monitor_width": monitor["width"],
+            "monitor_height": monitor["height"],
+            "scale_x": sx,
+            "scale_y": sy,
         }
-        return _downscale(img), meta
+        return scaled, meta

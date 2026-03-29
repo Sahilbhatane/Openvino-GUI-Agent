@@ -10,7 +10,7 @@ Pipeline per step:
   6. [PLANNING] Send annotated screenshot + elements + history + instruction to VLM
   7. Retry VLM once if no valid action returned
   8. [EXECUTING] Safety check -> show target highlight -> execute ONE action
-  9. [WAITING] Update memory, save debug artifacts, repeat
+  9. [WAITING] Update memory, reflection hints after failed execution, save debug artifacts, repeat
 """
 
 import json
@@ -68,6 +68,39 @@ class StepMemory:
     action_desc: str
     result: str
     screen_changed: bool
+    execution_ok: bool = True
+
+
+def _reflection_context(memory: deque) -> str:
+    """
+    Extra prompt context after a failed execution so the VLM can replan
+    (UI-TARS / MobileAgent-style reflection without a second model).
+    """
+    if not memory:
+        return ""
+    last = memory[-1]
+    if last.execution_ok:
+        return ""
+
+    consecutive = 0
+    for m in reversed(memory):
+        if not m.execution_ok:
+            consecutive += 1
+        else:
+            break
+
+    lines = [
+        "",
+        "REFLECTION (execution failure):",
+        f'The last action ({last.action_desc}) did not complete successfully: "{last.result}".',
+        "Choose a different element or approach. If the action was blocked by safety, use only allowed actions.",
+    ]
+    if consecutive >= 2:
+        lines.append(
+            f"Note: {consecutive} consecutive execution failures — reconsider the high-level approach "
+            "or break the task into smaller UI operations.",
+        )
+    return "\n".join(lines)
 
 
 def _format_memory(memory: deque) -> str:
@@ -258,8 +291,9 @@ class AgentController:
                     no_change_count = 0
                     log.info("Screen diff=%.4f -- change detected", diff)
 
-            # 3. History context
+            # 3. History context (+ reflection after failed execution)
             history_text = _format_memory(memory)
+            history_text += _reflection_context(memory)
             if no_change_count > 0:
                 history_text += (
                     f"\n\nWARNING: The screen has NOT changed for "
@@ -377,6 +411,7 @@ class AgentController:
                 action_desc=action_desc,
                 result=result.description,
                 screen_changed=screen_changed,
+                execution_ok=result.success,
             ))
 
             step_elapsed = time.perf_counter() - step_start_time
