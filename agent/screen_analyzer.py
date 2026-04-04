@@ -15,7 +15,7 @@ from utils.logger import get_logger
 
 log = get_logger("screen_analyzer")
 
-MAX_ELEMENTS = 30
+MAX_ELEMENTS = 24
 
 
 @dataclass
