@@ -7,3 +7,8 @@ __pycache__/
 *.pyc
 .env
 .cursor/
+.vscode/
+.pytest_cache/
+.cursorrules
+.windsurfrules
+.claude/

@@ -118,6 +118,19 @@ class Planner:
                 task_complete=False,
             )
 
+        valid_types = {t.value for t in ActionType}
+        # VLM sometimes returns only the action object, e.g. {"type":"click","element":24}
+        if isinstance(data, dict) and data.get("type") in valid_types:
+            if not any(
+                k in data
+                for k in ("thought", "action", "actions", "task_complete", "done")
+            ):
+                data = {
+                    "thought": "",
+                    "actions": [dict(data)],
+                    "task_complete": False,
+                }
+
         # The model sometimes uses "action" instead of "actions"
         if "action" in data and "actions" not in data:
             data["actions"] = data.pop("action")
@@ -131,7 +144,6 @@ class Planner:
             data["task_complete"] = data.pop("done")
 
         # Drop actions whose type the executor doesn't support
-        valid_types = {t.value for t in ActionType}
         if isinstance(data.get("actions"), list):
             cleaned = []
             for a in data["actions"]:

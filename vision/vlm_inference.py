@@ -23,10 +23,10 @@ each number to an element.
 
 Execute EXACTLY ONE action per step. Output ONLY one valid JSON object. No markdown, no code fences, no extra text.
 
-Example shape (replace values; use a single leading "{" and trailing "}" only):
+Top-level output MUST match this envelope (thought + single action + task_complete):
 {"thought":"brief reasoning","action":{"type":"click","element":3},"task_complete":false}
 
-Action types (use ONLY these shapes):
+Put ONE step inside "action" only, using these inner shapes:
   click        -- {"type":"click","element":<id>}  or  {"type":"click","x":<int>,"y":<int>}
   double_click -- {"type":"double_click","element":<id>}
   type         -- {"type":"type","text":"<string>","element":<id>}
@@ -36,6 +36,7 @@ Action types (use ONLY these shapes):
   hotkey       -- {"type":"hotkey","keys":["ctrl","c"]}
 
 Rules:
+- Never output only the inner action object; always include thought, action, and task_complete at the top level.
 - Return EXACTLY ONE action per response. Never return a list of actions.
 - Use "element" to reference numbered UI elements. Fall back to x,y only if no element matches.
 - To open an app: click the search bar, type the name, press enter.
