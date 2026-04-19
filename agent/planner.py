@@ -18,8 +18,9 @@ log = get_logger("planner")
 
 
 class Planner:
-    def __init__(self, vlm: VLMInference):
+    def __init__(self, vlm: VLMInference, max_new_tokens: int = 300):
         self.vlm = vlm
+        self.max_new_tokens = max_new_tokens
 
     def generate_plan(
         self,
@@ -32,6 +33,7 @@ class Planner:
             screenshot, instruction,
             elements_text=elements_text,
             history_text=history_text,
+            max_new_tokens=self.max_new_tokens,
         )
         plan = self._parse_response(raw)
         if len(plan.actions) > 1:
@@ -52,32 +54,82 @@ class Planner:
     # ── response parsing ──────────────────────────────────
 
     @staticmethod
+    def _looks_like_action_plan(obj: dict) -> bool:
+        """True if *obj* is a top-level plan, not a nested action dict."""
+        return any(
+            k in obj
+            for k in ("thought", "action", "actions", "task_complete", "done")
+        )
+
+    @staticmethod
+    def _parse_first_json_object(text: str) -> dict | None:
+        """Parse the first complete JSON object in *text* (handles leading junk)."""
+        dec = json.JSONDecoder()
+        for i, ch in enumerate(text):
+            if ch != "{":
+                continue
+            try:
+                obj, _ = dec.raw_decode(text, i)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(obj, dict) and Planner._looks_like_action_plan(obj):
+                return obj
+        return None
+
+    @staticmethod
     def _parse_response(raw: str) -> ActionPlan:
         """Best-effort extraction of JSON from the model's raw text."""
-        json_str = raw
+        json_str = raw.strip()
 
         # Strip markdown code fences the model may wrap around JSON
         fence = re.search(r"```(?:json)?\s*(.*?)```", raw, re.DOTALL)
         if fence:
-            json_str = fence.group(1)
+            json_str = fence.group(1).strip()
 
-        # Find the outermost { ... } block
-        brace = re.search(r"\{.*\}", json_str, re.DOTALL)
-        if brace:
-            json_str = brace.group(0)
+        # Model sometimes echoes "{{...}}" after seeing brace-heavy examples — peel one layer
+        for _ in range(3):
+            if len(json_str) >= 4 and json_str.startswith("{{") and json_str.endswith("}}"):
+                inner = json_str[1:-1].strip()
+                if Planner._parse_first_json_object(inner) is not None:
+                    json_str = inner
+                    continue
+            break
 
-        try:
-            data = json.loads(json_str)
-        except json.JSONDecodeError:
-            # Model may have been cut off mid-JSON; try to repair
+        data = Planner._parse_first_json_object(json_str)
+        if data is None:
+            try:
+                data = json.loads(json_str)
+            except json.JSONDecodeError:
+                pass
+        if data is None:
             data = Planner._try_repair_json(json_str)
-            if data is None:
-                log.warning("JSON parse failed, raw: %s", raw[:300])
-                return ActionPlan(
-                    thought=f"[parse error] {raw[:200]}",
-                    actions=[],
-                    task_complete=False,
-                )
+        if data is None:
+            brace = re.search(r"\{.*\}", json_str, re.DOTALL)
+            if brace:
+                frag = brace.group(0)
+                data = Planner._parse_first_json_object(frag)
+                if data is None:
+                    data = Planner._try_repair_json(frag)
+        if data is None:
+            log.warning("JSON parse failed, raw: %s", raw[:300])
+            return ActionPlan(
+                thought=f"[parse error] {raw[:200]}",
+                actions=[],
+                task_complete=False,
+            )
+
+        valid_types = {t.value for t in ActionType}
+        # VLM sometimes returns only the action object, e.g. {"type":"click","element":24}
+        if isinstance(data, dict) and data.get("type") in valid_types:
+            if not any(
+                k in data
+                for k in ("thought", "action", "actions", "task_complete", "done")
+            ):
+                data = {
+                    "thought": "",
+                    "actions": [dict(data)],
+                    "task_complete": False,
+                }
 
         # The model sometimes uses "action" instead of "actions"
         if "action" in data and "actions" not in data:
@@ -92,7 +144,6 @@ class Planner:
             data["task_complete"] = data.pop("done")
 
         # Drop actions whose type the executor doesn't support
-        valid_types = {t.value for t in ActionType}
         if isinstance(data.get("actions"), list):
             cleaned = []
             for a in data["actions"]:

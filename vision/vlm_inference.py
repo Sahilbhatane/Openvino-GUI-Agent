@@ -21,20 +21,22 @@ You are a desktop automation agent operating step-by-step. You see a screenshot 
 with numbered red badges marking interactive elements, plus a text list mapping \
 each number to an element.
 
-Execute EXACTLY ONE action per step. Output ONLY a JSON object. No markdown, no explanation.
+Execute EXACTLY ONE action per step. Output ONLY one valid JSON object. No markdown, no code fences, no extra text.
 
-Format: {{"thought":"brief reasoning about what to do next","action":{{...}},"task_complete":false}}
+Top-level output MUST match this envelope (thought + single action + task_complete):
+{"thought":"brief reasoning","action":{"type":"click","element":3},"task_complete":false}
 
-Action types (use ONLY these):
-  click        -- {{"type":"click","element":<id>}}  or  {{"type":"click","x":<int>,"y":<int>}}
-  double_click -- {{"type":"double_click","element":<id>}}
-  type         -- {{"type":"type","text":"<string>","element":<id>}}
-  scroll       -- {{"type":"scroll","amount":<int>}}  (positive=up, negative=down)
-  wait         -- {{"type":"wait","seconds":<number>}}
-  press_key    -- {{"type":"press_key","key":"<name>"}}  (enter, escape, tab, space, backspace, delete, up, down, left, right, win, f1-f12)
-  hotkey       -- {{"type":"hotkey","keys":["ctrl","c"]}}  (key combination)
+Put ONE step inside "action" only, using these inner shapes:
+  click        -- {"type":"click","element":<id>}  or  {"type":"click","x":<int>,"y":<int>}
+  double_click -- {"type":"double_click","element":<id>}
+  type         -- {"type":"type","text":"<string>","element":<id>}
+  scroll       -- {"type":"scroll","amount":<int>}  (positive=up, negative=down)
+  wait         -- {"type":"wait","seconds":<number>}
+  press_key    -- {"type":"press_key","key":"<name>"}  (enter, escape, tab, space, backspace, delete, up, down, left, right, win, f1-f12)
+  hotkey       -- {"type":"hotkey","keys":["ctrl","c"]}
 
 Rules:
+- Never output only the inner action object; always include thought, action, and task_complete at the top level.
 - Return EXACTLY ONE action per response. Never return a list of actions.
 - Use "element" to reference numbered UI elements. Fall back to x,y only if no element matches.
 - To open an app: click the search bar, type the name, press enter.
@@ -52,6 +54,70 @@ class TokenUsage:
     @property
     def tokens_per_second(self) -> float:
         return self.output_tokens / self.generation_time if self.generation_time > 0 else 0.0
+
+
+def _log_openvino_runtime_devices(visual_model, requested_device: str) -> None:
+    """Log devices OpenVINO exposes and, when possible, where compiled subgraphs run."""
+    try:
+        import openvino as ov
+
+        core = ov.Core()
+        log.info("OpenVINO Core available_devices=%s", list(core.available_devices))
+    except Exception as exc:
+        log.warning("Could not query OpenVINO Core().available_devices: %s", exc)
+
+    target = getattr(visual_model, "_device", None) or requested_device
+    log.info("OpenVINO model compile target string: %s (config/request was %s)", target, requested_device)
+
+    hints: list[str] = []
+
+    def _execution_devices_for_request(req) -> str | None:
+        if req is None:
+            return None
+        candidates = [req]
+        gcm = getattr(req, "get_compiled_model", None)
+        if callable(gcm):
+            try:
+                candidates.append(gcm())
+            except Exception:
+                pass
+        for cand in candidates:
+            if cand is None or not hasattr(cand, "get_property"):
+                continue
+            try:
+                devs = cand.get_property("EXECUTION_DEVICES")
+                if devs:
+                    return str(devs)
+            except Exception:
+                continue
+        return None
+
+    def _append_exec(label: str, req) -> None:
+        devs = _execution_devices_for_request(req)
+        if devs:
+            hints.append(f"{label}={devs}")
+
+    try:
+        ve = getattr(visual_model, "vision_embeddings", None)
+        if ve is not None:
+            _append_exec("vision_embeddings", getattr(ve, "request", None))
+    except Exception as exc:
+        log.debug("vision_embeddings EXECUTION_DEVICES: %s", exc)
+
+    try:
+        lm = getattr(visual_model, "language_model", None)
+        if lm is not None:
+            _append_exec("language_model", getattr(lm, "request", None))
+    except Exception as exc:
+        log.debug("language_model EXECUTION_DEVICES: %s", exc)
+
+    if hints:
+        log.info("OpenVINO compiled subgraph EXECUTION_DEVICES: %s", "; ".join(hints))
+    else:
+        log.info(
+            "Tip: run `python -c \"import openvino as ov; print(ov.Core().available_devices)\"` "
+            "to see devices; use GPU/NPU in config only if listed (OpenVINO does not use NVIDIA CUDA)."
+        )
 
 
 class VLMInference:
@@ -75,13 +141,36 @@ class VLMInference:
             self.model_path, trust_remote_code=True
         )
 
+        cache_dir = str(Path(self.model_path).parent / ".ov_cache")
+        ov_config = {
+            "PERFORMANCE_HINT": "LATENCY",
+            "CACHE_DIR": cache_dir,
+            "KV_CACHE_PRECISION": "u8",
+            "DYNAMIC_QUANTIZATION_GROUP_SIZE": "32",
+        }
+
         log.info("Loading OpenVINO model (device=%s) ...", self.device)
         from optimum.intel.openvino import OVModelForVisualCausalLM
 
         self.model = OVModelForVisualCausalLM.from_pretrained(
-            self.model_path, device=self.device, trust_remote_code=True
+            self.model_path, device=self.device, trust_remote_code=True,
+            ov_config=ov_config,
         )
         log.info("Model loaded successfully.")
+        _log_openvino_runtime_devices(self.model, self.device)
+
+    def warmup(self) -> None:
+        """Run a tiny inference so the first real call doesn't pay cold-start cost."""
+        if not self.is_loaded:
+            return
+        log.info("Warming up model (single short generate) ...")
+        dummy = Image.new("RGB", (64, 64), color=(0, 0, 0))
+        try:
+            self.analyze_screen(dummy, "warmup", max_new_tokens=1)
+        except Exception as exc:
+            log.warning("Warmup generate failed (non-fatal): %s", exc)
+        self.last_usage = None
+        log.info("Warmup complete.")
 
     @property
     def is_loaded(self) -> bool:

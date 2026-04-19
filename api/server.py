@@ -46,8 +46,9 @@ async def lifespan(app: FastAPI):
     log.info("Loading VLM (this may take a minute) ...")
     vlm = VLMInference(MODEL_PATH, device=OPENVINO_DEVICE)
     vlm.load()
+    vlm.warmup()
 
-    planner = Planner(vlm)
+    planner = Planner(vlm, max_new_tokens=MAX_NEW_TOKENS)
     executor = Executor(
         max_actions=MAX_ACTIONS_PER_STEP,
         action_delay=ACTION_DELAY_SECONDS,

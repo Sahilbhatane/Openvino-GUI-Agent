@@ -16,6 +16,14 @@ class TestParseResponse:
         assert plan.actions[0].element == 3
         assert plan.task_complete is False
 
+    def test_bare_action_object_wrapped(self):
+        """Some VLMs emit only the action dict without thought/action/task_complete."""
+        raw = '{"type":"click","element":24}'
+        plan = Planner._parse_response(raw)
+        assert len(plan.actions) == 1
+        assert plan.actions[0].type == ActionType.CLICK
+        assert plan.actions[0].element == 24
+
     def test_json_in_code_fence(self):
         raw = '```json\n{"thought": "typing text", "actions": [{"type": "type", "text": "hello", "element": 5}], "task_complete": false}\n```'
         plan = Planner._parse_response(raw)

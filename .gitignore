@@ -1,8 +1,14 @@
 .worktrees/
 venv/
 models/Phi-3.5-vision-instruct-int4-ov/
+models/.ov_cache/
 debug_screenshots/
 __pycache__/
 *.pyc
 .env
 .cursor/
+.vscode/
+.pytest_cache/
+.cursorrules
+.windsurfrules
+.claude/

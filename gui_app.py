@@ -44,6 +44,7 @@ from config import (
     HIGHLIGHT_DURATION,
     MAX_ACTIONS_PER_STEP,
     MAX_ITERATIONS,
+    MAX_NEW_TOKENS,
     MAX_PLAN_RETRIES,
     MEMORY_SIZE,
     MODEL_PATH,
@@ -293,8 +294,10 @@ class ModelLoader(QThread):
             self.progress.emit("Loading VLM model -- this may take a minute ...")
             vlm = VLMInference(MODEL_PATH, device=OPENVINO_DEVICE)
             vlm.load()
+            self.progress.emit("Warming up model ...")
+            vlm.warmup()
             self.progress.emit("Building agent controller ...")
-            planner = Planner(vlm)
+            planner = Planner(vlm, max_new_tokens=MAX_NEW_TOKENS)
             executor = Executor(
                 max_actions=MAX_ACTIONS_PER_STEP,
                 action_delay=ACTION_DELAY_SECONDS,

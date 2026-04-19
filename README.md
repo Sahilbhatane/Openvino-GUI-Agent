@@ -31,7 +31,7 @@ User Instruction
 ## Features
 
 - **Cross-platform**: Windows, Linux, macOS accessibility backends
-- **Local inference**: Runs entirely on CPU via OpenVINO (no cloud API needed)
+- **Local inference**: Runs locally via OpenVINO (GPU when available, CPU fallback — no cloud API needed)
 - **Observable**: 3-panel UI shows live screen, agent reasoning, and control metrics
 - **Safety system**: Blocks dangerous commands (rm -rf, format, shutdown), hotkeys (Alt+F4), and executables (powershell, cmd)
 - **Structured errors**: Every error is categorized (model/execution/os/grounding/safety) with recovery info
@@ -146,9 +146,9 @@ All tunables are in `config.py`:
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `OPENVINO_DEVICE` | `CPU` | OpenVINO device (CPU, GPU, AUTO) |
+| `OPENVINO_DEVICE` | `AUTO` | OpenVINO device — AUTO tries GPU first, falls back to CPU |
 | `MAX_ITERATIONS` | `10` | Maximum steps per task |
-| `MAX_NEW_TOKENS` | `300` | VLM generation limit |
+| `MAX_NEW_TOKENS` | `150` | VLM generation limit (lower = faster decode, raise if JSON gets truncated) |
 | `STEP_DELAY_SECONDS` | `1.5` | Pause between iterations |
 | `MEMORY_SIZE` | `5` | Steps kept in short-term memory |
 | `SCREEN_CHANGE_THRESHOLD` | `0.02` | Minimum diff to detect screen change |
@@ -162,6 +162,14 @@ All tunables are in `config.py`:
 | Windows | pywinauto (UIA) | `pip install pywinauto` (included in requirements.txt) |
 | Linux | AT-SPI (pyatspi) | `sudo apt install python3-pyatspi` |
 | macOS | AXUIElement | `pip install pyobjc-framework-ApplicationServices pyobjc-framework-Quartz pyobjc-framework-Cocoa` |
+
+### GPU acceleration (optional, recommended)
+
+`OPENVINO_DEVICE = "AUTO"` (the default) will use the GPU if a compatible driver is present and fall back to CPU otherwise. To enable GPU inference:
+
+- **Intel iGPU / dGPU (Windows/Linux):** Install the latest Intel GPU driver and the [OpenVINO GPU plugin](https://docs.openvino.ai/2024/get-started/configurations/configurations-intel-gpu.html).
+- **Verify:** Run `python -c "from openvino import Core; print(Core().available_devices)"` — you should see `GPU` in the list.
+- **Force CPU only:** Set `OPENVINO_DEVICE = "CPU"` in `config.py`.
 
 ## Running Tests
 
